@@ -6,10 +6,12 @@
 
 #include "features/re_code.h"
 #include "features/re_disasm.h"
+#include "features/re_flirt.h"
 #include "features/re_format.h"
 #include "features/re_func.h"
 #include "features/re_jtable.h"
 #include "features/re_pe.h"
+#include "features/re_stack.h"
 #include "features/re_xref.h"
 #include "utils/re_json.h"
 #include "utils/re_strbuf.h"
@@ -76,7 +78,9 @@ static void emit_flags(re_jw_t *w, uint32_t flags) {
     re_jw_arr_end(w);
 }
 
-static void emit_func(re_jw_t *w, const re_func_t *f, size_t edges) {
+static void emit_func(re_ctx_t *ctx, re_code_t *code, re_jw_t *w, const re_func_t *f, size_t edges,
+                      const re_xrefset_t *xs) {
+    re_stack_t st;
     re_jw_obj(w);
     re_jw_khex(w, "va", f->va, 16);
     re_jw_ku64(w, "rva", f->rva);
@@ -88,6 +92,22 @@ static void emit_func(re_jw_t *w, const re_func_t *f, size_t edges) {
     re_jw_ku64(w, "out_edges", edges);
     if (f->dispatch)
         re_jw_khex(w, "dispatch", f->dispatch, 16);
+    re_stack_analyze(code, f, ctx->arena, &st);
+    re_jw_kcstr(w, "cc", re_cc_name(st.cc));
+    re_jw_ku64(w, "params", st.n_params);
+    re_jw_ku64(w, "locals", st.n_locals);
+    if (st.uses_frame_ptr)
+        re_jw_kbool(w, "frame_ptr", true);
+    if (st.tail_call)
+        re_jw_kbool(w, "tail_call", true);
+    if (f->name.n)
+        re_jw_kstr(w, "name", f->name);
+    if (xs) {
+        re_vec_t strs;
+        re_vec_init(&strs, sizeof(uint32_t));
+        re_jw_ku64(w, "strings", re_xref_func_strings(xs, f, ctx->arena, &strs));
+        re_vec_truncate(&strs, 0);
+    }
     emit_flags(w, f->flags);
     re_jw_obj_end(w);
 }
@@ -97,21 +117,34 @@ int re_cmd_funcs(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     re_pe_t pe;
     re_code_t code;
     re_fscan_t scan;
+    re_xrefset_t xs;
     (void)argc;
     (void)argv;
     if (!prepare(ctx, path, &f, &pe, &code))
         return re_err_exit_code(ctx->err->code);
     re_func_scan(&code, ctx->arena, &scan);
+    re_xref_build(&code, &scan, &pe, ctx->arena, &xs);
+    re_vec_t sigs;
+    re_vec_init(&sigs, sizeof(re_sig_t));
+    re_flirt_builtin(ctx->arena, &sigs);
+    const char *sigfile = re_cmd_positional(argc, argv, 1);
+    if (sigfile)
+        re_flirt_load(ctx->arena, sigfile, &sigs);
     re_jw_t w;
     re_jw_init(&w, ctx->arena);
     envelope(&w, "funcs", f.whole, &pe);
+    re_jw_ku64(&w, "signatures", RE_VEC_LEN(&sigs));
     re_jw_key(&w, "functions");
     re_jw_arr(&w);
     size_t shown = 0;
     size_t total = RE_VEC_LEN(&scan.funcs);
     for (size_t i = ctx->offset; i < total && shown < ctx->limit; i++, shown++) {
-        const re_func_t *fn = re_func_at(&scan, i);
-        emit_func(&w, fn, re_func_edge_count(&scan, fn));
+        re_func_t fn = *re_func_at(&scan, i);
+        re_str_t nm = re_str("");
+        re_str_t mod = re_str("");
+        if (re_flirt_name(&code, &fn, &sigs, &nm, &mod))
+            fn.name = nm;
+        emit_func(ctx, &code, &w, &fn, re_func_edge_count(&scan, &fn), &xs);
     }
     re_jw_arr_end(&w);
     re_jw_ku64(&w, "total", total);
