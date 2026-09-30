@@ -19,6 +19,7 @@ extern "C" {
 #include "utils/re_fmt.h"
 #include "utils/re_hash.h"
 #include "utils/re_hex.h"
+#include "utils/re_jr.h"
 #include "utils/re_json.h"
 #include "utils/re_log.h"
 #include "utils/re_map.h"

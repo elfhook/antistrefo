@@ -38,6 +38,10 @@ typedef struct re_ctx {
     re_str_t regex; // empty when no filter was given
     bool has_regex;
     bool no_color; // --no-color, which also honours the NO_COLOR convention
+    // Where a command writes its response. NULL means stdout, which is every case
+    // except the MCP server: it points at a temporary file so the bytes can be
+    // handed back as structured content instead of going to the client as text.
+    void *stream;
     re_err_t *err;
 } re_ctx_t;
 
@@ -55,6 +59,9 @@ typedef struct {
 
 const re_cmd_t *re_cmd_table(size_t *count);
 const re_cmd_t *re_cmd_find(const char *name);
+
+// Where a command's response goes: ctx->stream when set, stdout otherwise.
+void *re_ctx_out(const re_ctx_t *ctx);
 
 // Parse the flags every command shares. Returns false and fills err on a bad flag,
 // so a command only ever sees the positional path.

@@ -78,7 +78,7 @@ static void emit_hits(re_ctx_t *ctx, re_span_t img, re_format_t fmt, re_search_t
     re_jw_ku64(&w, "total", s->total);
     re_jw_kbool(&w, "truncated", s->more);
     re_jw_obj_end(&w);
-    re_jw_flush(&w, stdout);
+    re_jw_flush(&w, re_ctx_out(ctx));
 }
 
 int re_cmd_search(re_ctx_t *ctx, const char *path, int argc, char **argv) {
@@ -154,7 +154,7 @@ int re_cmd_rules(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     envelope(&w, "rules", img, fmt);
     re_rules_emit(&w, &findings, true);
     re_jw_obj_end(&w);
-    re_jw_flush(&w, stdout);
+    re_jw_flush(&w, re_ctx_out(ctx));
     re_file_close(&f);
     return 0;
 }
@@ -189,7 +189,7 @@ int re_cmd_entropy(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     }
     re_jw_arr_end(&w);
     re_jw_obj_end(&w);
-    re_jw_flush(&w, stdout);
+    re_jw_flush(&w, re_ctx_out(ctx));
     re_file_close(&f);
     return 0;
 }
@@ -219,6 +219,6 @@ int re_cmd_demangle(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     else
         re_jw_knull(&w, "demangled");
     re_jw_obj_end(&w);
-    re_jw_flush(&w, stdout);
+    re_jw_flush(&w, re_ctx_out(ctx));
     return 0;
 }

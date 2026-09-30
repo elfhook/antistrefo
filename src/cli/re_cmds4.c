@@ -88,7 +88,7 @@ int re_cmd_decompile(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     re_jw_ku64(&w, "strings", re_xref_func_strings(&xs, fn, ctx->arena, &strs));
     re_vec_truncate(&strs, 0);
     re_jw_obj_end(&w);
-    re_jw_flush(&w, stdout);
+    re_jw_flush(&w, re_ctx_out(ctx));
     re_file_close(&f);
     return 0;
 }

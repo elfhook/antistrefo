@@ -84,7 +84,7 @@ static void finish(re_ctx_t *ctx, re_jw_t *w, re_loaded_t *l) {
     (void)ctx;
     (void)l;
     re_jw_obj_end(w);
-    re_jw_flush(w, stdout);
+    re_jw_flush(w, re_ctx_out(ctx));
 }
 
 int re_cmd_info(re_ctx_t *ctx, const char *path, int argc, char **argv) {
@@ -404,4 +404,11 @@ int re_cmd_hexdump(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     finish(ctx, &w, &l);
     unload(&l);
     return 0;
+}
+
+// Where a command's response goes. NULL in the context means stdout, which is every
+// caller except the MCP server. The indirection exists so the server can capture a
+// response instead of printing it, without every command learning about protocols.
+void *re_ctx_out(const re_ctx_t *ctx) {
+    return ctx->stream ? ctx->stream : stdout;
 }

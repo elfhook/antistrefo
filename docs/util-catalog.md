@@ -50,6 +50,7 @@ and the helper will be needed twice or loops over bytes, add it here first.
 | `re_err_*` | error codes, the error record, exit code mapping | `re_err.h` |
 | `re_log_*` | the only stderr writer, silent when muted or in mcp mode | `re_log.h` |
 | `re_text_*` | fixed width table rendering for `--format text` | `re_text.h` |
+| `re_jr_*` | reading JSON that arrived over a socket, and escaping on the way out | `re_jr.h` |
 | `re_tui_*` | the framed report: header, rules, panels, boxes, styles, clipping | `re_tui.h` |
 
 ## Aggregator

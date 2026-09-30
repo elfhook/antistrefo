@@ -122,7 +122,7 @@ int re_cmd_funcs(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     re_jw_kbool(&w, "truncated", shown < total);
     re_jw_ku64(&w, "edges", RE_VEC_LEN(&scan.edges));
     re_jw_obj_end(&w);
-    re_jw_flush(&w, stdout);
+    re_jw_flush(&w, re_ctx_out(ctx));
     re_file_close(&f);
     return 0;
 }
@@ -236,7 +236,7 @@ int re_cmd_xrefs(re_ctx_t *ctx, const char *path, int argc, char **argv) {
         re_jw_ku64(&w, "total", RE_VEC_LEN(&xs.fwd));
         re_jw_kbool(&w, "truncated", false);
         re_jw_obj_end(&w);
-        re_jw_flush(&w, stdout);
+        re_jw_flush(&w, re_ctx_out(ctx));
         re_file_close(&f);
         return 0;
     }
@@ -258,7 +258,7 @@ int re_cmd_xrefs(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     re_jw_ku64(&w, "total", RE_VEC_LEN(&into) + RE_VEC_LEN(&outof));
     re_jw_kbool(&w, "truncated", false);
     re_jw_obj_end(&w);
-    re_jw_flush(&w, stdout);
+    re_jw_flush(&w, re_ctx_out(ctx));
     re_file_close(&f);
     return 0;
 }
@@ -309,7 +309,7 @@ int re_cmd_jtables(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     re_jw_ku64(&w, "total", total);
     re_jw_kbool(&w, "truncated", shown < total);
     re_jw_obj_end(&w);
-    re_jw_flush(&w, stdout);
+    re_jw_flush(&w, re_ctx_out(ctx));
     re_file_close(&f);
     return 0;
 }
@@ -404,7 +404,7 @@ int re_cmd_disasm(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     re_jw_ku64(&w, "total", shown);
     re_jw_kbool(&w, "truncated", shown >= ctx->limit);
     re_jw_obj_end(&w);
-    re_jw_flush(&w, stdout);
+    re_jw_flush(&w, re_ctx_out(ctx));
     re_file_close(&f);
     return 0;
 }

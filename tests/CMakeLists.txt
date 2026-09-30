@@ -32,3 +32,14 @@ if(MSVC)
     target_compile_definitions(re_test_tui PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 add_test(NAME tui COMMAND re_test_tui)
+
+# The JSON reader suite is separate because a reader that is lenient about a malformed
+# frame is a protocol bug that shows up as a mysterious client disconnect.
+add_executable(re_test_jr test_jr.c)
+target_link_libraries(re_test_jr PRIVATE re_core re_utils re_flags)
+if(MSVC)
+    set_property(TARGET re_test_jr
+        PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    target_compile_definitions(re_test_jr PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+add_test(NAME jr COMMAND re_test_jr)
