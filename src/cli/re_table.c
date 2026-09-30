@@ -1,0 +1,160 @@
+// re_table.c - the command table and the shared flag parser, the single source
+// Module: cli (C11).
+// Owns: command metadata and the shared flag parsing for every command.
+// Depends: re_table.h and the command entry points. No I/O beyond stdout.
+#include "cli/re_table.h"
+
+#include <string.h>
+
+#include "cli/re_cmds.h"
+static const re_cmd_t kCommands[] = {
+    {"info", "format, architecture, hashes and layout summary", "info <file>", re_cmd_info, true},
+    {"triage", "one call ingest view: layout, imports, devices, risk, capabilities",
+     "triage <file>", re_cmd_triage, true},
+    {"sections", "section table with per section entropy", "sections <file>", re_cmd_sections,
+     true},
+    {"imports", "imported modules and symbols, demangled when possible", "imports <file>",
+     re_cmd_imports, true},
+    {"exports", "exported symbols, demangled when possible", "exports <file>", re_cmd_exports,
+     true},
+    {"strings", "printable strings, ascii and utf-16, with a regex filter",
+     "strings <file> [--regex R]", re_cmd_strings, true},
+    {"search", "find text, an immediate value, or a hex pattern with wildcards",
+     "search <file> <pattern>", re_cmd_search, true},
+    {"rules", "capability findings with the evidence that fired each rule", "rules <file>",
+     re_cmd_rules, true},
+    {"entropy", "windowed entropy, to locate packed or encrypted regions",
+     "entropy <file> [--win N] [--step N]", re_cmd_entropy, true},
+    {"funcs", "recovered functions with size, frame and call counts", "funcs <file>", re_cmd_funcs,
+     true},
+    {"demangle", "demangle one C++ symbol, no file needed", "demangle <symbol>", re_cmd_demangle,
+     false},
+    {"hexdump", "raw bytes at a file offset", "hexdump <file> --off N --len N", re_cmd_hexdump,
+     true},
+    {"mcp", "run the MCP server over stdio", "mcp", NULL, false},
+    {"help", "list commands", "help", NULL, false},
+    {"version", "print the version and schema", "version", NULL, false},
+};
+const re_cmd_t *re_cmd_table(size_t *count) {
+    if (count)
+        *count = sizeof(kCommands) / sizeof(kCommands[0]);
+    return kCommands;
+}
+
+const re_cmd_t *re_cmd_find(const char *name) {
+    size_t n = 0;
+    const re_cmd_t *t = re_cmd_table(&n);
+    for (size_t i = 0; i < n; i++) {
+        if (re_str_eq_cstr(re_str(t[i].name), name))
+            return &t[i];
+    }
+    return NULL;
+}
+
+static bool parse_u64(const char *s, uint64_t *out) {
+    re_str_t v = re_str(s);
+    if (v.n == 0)
+        return false;
+    uint64_t base = 10;
+    size_t i = 0;
+    if (v.n > 2 && v.p[0] == '0' && (v.p[1] == 'x' || v.p[1] == 'X')) {
+        base = 16;
+        i = 2;
+    }
+    uint64_t acc = 0;
+    for (; i < v.n; i++) {
+        int d = re_hex_val(v.p[i]);
+        if (d < 0 || (uint64_t)d >= base)
+            return false;
+        acc = acc * base + (uint64_t)d;
+    }
+    *out = acc;
+    return true;
+}
+// Apply one shared flag to the context. Returns 0 when the flag was not ours.
+static bool apply_flag(re_ctx_t *ctx, re_str_t a, const char *val, re_err_t *err) {
+    if (re_str_starts_cstr(a, "--format")) {
+        re_str_t v = re_str(val);
+        if (re_str_eq_cstr(v, "text"))
+            ctx->out = RE_FMT_OUT_TEXT;
+        else if (re_str_eq_cstr(v, "json"))
+            ctx->out = RE_FMT_OUT_JSON;
+        else {
+            RE_ERR_SETF(err, RE_E_USAGE, "--format must be json or text, got %s", val);
+            return false;
+        }
+        return true;
+    }
+    if (re_str_starts_cstr(a, "--regex")) {
+        ctx->regex = re_str(val);
+        ctx->has_regex = true;
+        return true;
+    }
+    bool is_off = re_str_starts_cstr(a, "--off");
+    bool is_len = re_str_starts_cstr(a, "--len");
+    if (!re_str_starts_cstr(a, "--limit") && !re_str_starts_cstr(a, "--offset") && !is_off &&
+        !is_len)
+        return false;
+    uint64_t n = 0;
+    if (!parse_u64(val, &n)) {
+        RE_ERR_SETF(err, RE_E_USAGE, "expected a number, got %s", val);
+        return false;
+    }
+    if (re_str_starts_cstr(a, "--limit"))
+        ctx->limit = (size_t)n;
+    else if (re_str_starts_cstr(a, "--offset"))
+        ctx->offset = (size_t)n;
+    else if (is_len)
+        ctx->len = n;
+    else
+        ctx->off = n;
+    return true;
+}
+
+bool re_cmd_parse(re_ctx_t *ctx, int argc, char **argv, int *first_positional, re_err_t *err) {
+    ctx->out = RE_FMT_OUT_JSON;
+    ctx->limit = 200;
+    ctx->offset = 0;
+    ctx->off = 0;
+    ctx->len = 256;
+    ctx->has_regex = false;
+    int pos = argc;
+    for (int i = 0; i < argc; i++) {
+        re_str_t a = re_str(argv[i]);
+        if (!re_str_starts_cstr(a, "--")) {
+            if (pos == argc)
+                pos = i;
+            continue;
+        }
+        // Prefer the --flag=value form so a value never looks like a flag.
+        const char *val = NULL;
+        if (re_str_starts_cstr(a, "--format="))
+            val = argv[i] + 9;
+        else if (re_str_starts_cstr(a, "--regex="))
+            val = argv[i] + 8;
+        else if (re_str_starts_cstr(a, "--len="))
+            val = argv[i] + 6;
+        else if (re_str_starts_cstr(a, "--off="))
+            val = argv[i] + 6;
+        else if (re_str_starts_cstr(a, "--limit="))
+            val = argv[i] + 8;
+        else if (re_str_starts_cstr(a, "--offset="))
+            val = argv[i] + 9;
+        else if (re_str_eq_cstr(a, "--format") || re_str_eq_cstr(a, "--regex") ||
+                 re_str_eq_cstr(a, "--limit") || re_str_eq_cstr(a, "--offset") ||
+                 re_str_eq_cstr(a, "--off") || re_str_eq_cstr(a, "--len")) {
+            if (i + 1 >= argc) {
+                RE_ERR_SETF(err, RE_E_USAGE, "flag %s needs a value", argv[i]);
+                return false;
+            }
+            val = argv[++i];
+        } else {
+            RE_ERR_SETF(err, RE_E_USAGE, "unknown flag %s", argv[i]);
+            return false;
+        }
+        if (val && !apply_flag(ctx, a, val, err))
+            return false;
+    }
+    *first_positional = pos;
+    return true;
+}

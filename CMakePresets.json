@@ -1,0 +1,120 @@
+{
+  "version": 4,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_POLICY_VERSION_MINIMUM": "3.5",
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl"
+      }
+    },
+    {
+      "name": "msvc-debug",
+      "displayName": "MSVC x64 Debug, static CRT",
+      "inherits": "base",
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreadedDebug"
+      }
+    },
+    {
+      "name": "msvc-release",
+      "displayName": "MSVC x64 Release, static CRT, LTO",
+      "inherits": "base",
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded",
+        "CMAKE_INTERPROCEDURAL_OPTIMIZATION": "ON",
+        "RE_WERROR": "ON"
+      }
+    },
+    {
+      "name": "msvc-asan",
+      "displayName": "MSVC x64 Debug with the address sanitizer",
+      "inherits": "msvc-debug",
+      "cacheVariables": {
+        "CMAKE_C_FLAGS": "/fsanitize=address",
+        "CMAKE_CXX_FLAGS": "/fsanitize=address"
+      }
+    },
+    {
+      "name": "mingw-debug",
+      "displayName": "MinGW x64 Debug, second compiler check",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++",
+        "RE_WERROR": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "msvc-debug",
+      "configurePreset": "msvc-debug"
+    },
+    {
+      "name": "msvc-release",
+      "configurePreset": "msvc-release"
+    },
+    {
+      "name": "msvc-asan",
+      "configurePreset": "msvc-asan"
+    },
+    {
+      "name": "mingw-debug",
+      "configurePreset": "mingw-debug"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "msvc-release",
+      "configurePreset": "msvc-release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "msvc-asan",
+      "configurePreset": "msvc-asan",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "mingw-debug",
+      "configurePreset": "mingw-debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    }
+  ]
+}
