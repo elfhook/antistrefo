@@ -69,6 +69,19 @@ static bool sub_rsp(const re_insn_t *in, uint32_t *out) {
     *out = (uint32_t)in->imm;
     return true;
 }
+// A data reference is a RIP relative operand, or a wide immediate that looks like
+// an address in this image. Both are how code reaches strings, jump tables and
+// import addresses, and neither is a control flow edge, so they are recorded
+// separately or a caller asking "what does this function touch" sees nothing.
+static bool data_ref(const re_code_t *c, const re_insn_t *in) {
+    if (in->is_call || in->is_branch)
+        return false; // the operand is the transfer's own target, not a data use
+    if (in->has_mem)
+        return true;
+    if (in->opsize == 8 && in->imm > 0xFFFF && (uint64_t)in->imm >= c->base)
+        return true;
+    return false;
+}
 
 // One direct transfer, and what to do about it. The distinction that matters is
 // conditional against unconditional: a conditional branch target is another block
@@ -76,32 +89,52 @@ static bool sub_rsp(const re_insn_t *in, uint32_t *out) {
 // different function and its target must go to the function queue instead.
 // Treating the second as a block is how one function ends up reporting another
 // function's instructions as its own.
+//
+// A transfer through a RIP relative operand names its target too. That form is how
+// a driver calls a Windows API, through the import slot, and calling it indirect
+// would throw away the single most useful fact about the reference.
 static void take_edge(walk_t *w, re_vec_t *blocks, const re_insn_t *in, re_func_t *f) {
     uint8_t kind = RE_EDGE_NONE;
+    uint64_t target = in->has_target ? in->target : (in->has_mem ? in->mem : 0);
+    bool have = in->has_target || in->has_mem;
+    if (data_ref(w->code, in))
+        add_edge(w->a, w->edges, in->addr, in->has_mem ? in->mem : (uint64_t)in->imm, RE_EDGE_DATA,
+                 true);
     if (in->is_call)
         kind = RE_EDGE_CALL;
     else if (in->is_branch)
         kind = in->is_conditional ? RE_EDGE_COND : RE_EDGE_JUMP;
     if (kind == RE_EDGE_NONE)
         return;
-    add_edge(w->a, w->edges, in->addr, in->target, kind, in->has_target);
+    if (!have) {
+        // An unresolved transfer is still a fact about the function: a call
+        // through a register cannot be resolved, and an indirect jump is a
+        // dispatch. Both are recorded so the report can say so out loud.
+        add_edge(w->a, w->edges, in->addr, 0, kind, false);
+        if (in->is_call)
+            f->n_calls++;
+        else {
+            f->n_jumps++;
+            f->flags |= RE_FUNC_JTABLE;
+        }
+        return;
+    }
+    add_edge(w->a, w->edges, in->addr, target, kind, true);
     if (in->is_call)
         f->n_calls++;
     else
         f->n_jumps++;
-    if (!in->has_target) {
-        if (in->is_branch)
-            f->flags |= RE_FUNC_JTABLE; // an indirect jump is a dispatch, not yet a table
-        return;
-    }
-    if (!re_code_in_code(w->code, in->target)) {
-        f->flags |= RE_FUNC_EXTERNAL;
+    if (!re_code_in_code(w->code, target)) {
+        // A call through an import slot lands in data, not code, and that is
+        // expected rather than a call that left the image.
+        if (!in->has_mem)
+            f->flags |= RE_FUNC_EXTERNAL;
         return;
     }
     if (in->is_call || !in->is_conditional)
-        push_u64(w->a, w->queue, in->target);
-    else if (!re_code_covered(w->code, in->target, 1))
-        push_u64(w->a, blocks, in->target);
+        push_u64(w->a, w->queue, target);
+    else if (!re_code_covered(w->code, target, 1))
+        push_u64(w->a, blocks, target);
 }
 
 // Walk one function. Blocks are appended to a list and consumed with a cursor

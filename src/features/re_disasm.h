@@ -31,12 +31,14 @@ typedef struct {
     bool is_conditional; // branch that falls through as well as jumping
     bool rip_rel;        // the memory operand is RIP relative
     bool has_target;     // target is meaningful
+    bool has_mem;        // mem is the effective address of the memory operand
     bool has_modrm;
     uint8_t modrm;
     uint8_t opsize;  // operand size in bytes: 1, 2, 4 or 8
     uint8_t rex;     // extension prefix, 0 when absent
     int64_t imm;     // immediate value, or the relative offset of a branch
     uint64_t target; // resolved branch or call destination
+    uint64_t mem;    // effective address of a RIP relative memory operand
     uint8_t ops[4];  // architecture specific operand encodings
     re_str_t text;   // owned by the caller's arena, may be NULL
 } re_insn_t;

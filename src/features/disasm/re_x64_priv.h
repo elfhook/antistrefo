@@ -50,7 +50,9 @@ typedef struct {
     bool rip_rel;     // the ModRM used RIP relative addressing
     bool vex;         // encoded with a VEX or EVEX prefix
     int64_t imm;      // immediate, or the relative offset for a branch
+    int64_t disp;     // RIP relative displacement, signed
     uint64_t target;  // resolved branch or call destination
+    uint64_t mem;     // effective address of a RIP relative operand
     bool has_target;
 } x64_insn_t;
 

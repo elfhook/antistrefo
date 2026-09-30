@@ -36,8 +36,11 @@ typedef struct {
 
 typedef struct {
     re_str_t dll;
-    uint32_t first_sym;
+    uint32_t first_sym; // index into re_pe_t::syms
     uint32_t n_syms;
+    // RVA of this module's first IAT slot. Code reaches an import through
+    // [rip+slot], so without this a call target cannot be named.
+    uint32_t first_thunk;
 } re_pe_imp_t;
 
 typedef struct {

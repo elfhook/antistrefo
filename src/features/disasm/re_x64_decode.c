@@ -132,8 +132,15 @@ static bool x64_modrm(const uint8_t *p, size_t n, size_t *i, x64_insn_t *in) {
     if (mod == 0 && rm == 5) {
         // With a 64-bit address this is RIP relative; with a 32-bit one it is a
         // plain absolute address, and either way it costs four displacement bytes.
+        uint64_t d = 0;
+        if (!rdn(p, n, i, 4, &d))
+            return false;
         in->rip_rel = in->addrsize == 8;
-        return rdn(p, n, i, 4, &(uint64_t){0});
+        // Signed, because a reference backwards to an earlier table or string is
+        // the common case and an unsigned displacement would point a gigabyte away.
+        if (in->rip_rel)
+            in->disp = (int64_t)(int32_t)(uint32_t)d;
+        return true;
     }
     if (rm == 4) {
         uint8_t sib;
@@ -209,7 +216,9 @@ static void blank(x64_insn_t *in) {
     in->rip_rel = false;
     in->vex = false;
     in->imm = 0;
+    in->disp = 0;
     in->target = 0;
+    in->mem = 0;
     in->has_target = false;
     in->id = 0;
 }
@@ -251,6 +260,10 @@ static bool x64_finish(const uint8_t *p, size_t n, size_t i, uint64_t addr, x64_
         in->target = addr + (uint64_t)i + (uint64_t)in->imm;
         in->has_target = true;
     }
+    // The RIP relative address is only known once the whole instruction is, since
+    // it counts from the end of the instruction rather than from the displacement.
+    if (in->rip_rel)
+        in->mem = addr + (uint64_t)i + (uint64_t)in->disp;
     in->id = X64_ID(in->map, in->opcode);
     in->size = (uint8_t)i;
     return i > 0 && i <= n && i <= RE_MAX_INSN_LEN;

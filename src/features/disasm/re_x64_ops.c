@@ -158,6 +158,8 @@ static bool x64_vt_decode(void *ctx, uint64_t addr, re_span_t code, re_insn_t *o
     out->rex = in.rex;
     out->imm = in.imm;
     out->target = in.target;
+    out->mem = in.mem;
+    out->has_mem = in.rip_rel;
     out->ops[0] = X64_ID_OP(in.id);
     out->ops[1] = in.map;
     out->ops[2] = (uint8_t)(((unsigned)in.modrm >> 3) & 7u);

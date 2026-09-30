@@ -189,6 +189,7 @@ static re_err_code_t parse_imports(re_span_t img, re_pe_t *pe, re_arena_t *a) {
         re_pe_imp_t imp;
         imp.first_sym = 0;
         imp.n_syms = 0;
+        imp.first_thunk = ft;
         uint64_t noff;
         re_span_t dll;
         if (re_pe_rva2off(pe, name_rva, &noff) && re_rd_cstr(img, noff, 256, &dll)) {

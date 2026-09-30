@@ -27,6 +27,8 @@ static const re_cmd_t kCommands[] = {
      "entropy <file> [--win N] [--step N]", re_cmd_entropy, true},
     {"funcs", "recovered functions with size, frame and call counts", "funcs <file>", re_cmd_funcs,
      true},
+    {"xrefs", "cross references, with imports, exports and strings named", "xrefs <file> [addr]",
+     re_cmd_xrefs, true},
     {"demangle", "demangle one C++ symbol, no file needed", "demangle <symbol>", re_cmd_demangle,
      false},
     {"hexdump", "raw bytes at a file offset", "hexdump <file> --off N --len N", re_cmd_hexdump,
