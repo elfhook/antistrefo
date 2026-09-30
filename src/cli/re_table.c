@@ -29,6 +29,10 @@ static const re_cmd_t kCommands[] = {
      true},
     {"xrefs", "cross references, with imports, exports and strings named", "xrefs <file> [addr]",
      re_cmd_xrefs, true},
+    {"jtables", "jump tables behind an indirect branch, with case targets", "jtables <file>",
+     re_cmd_jtables, true},
+    {"disasm", "disassemble a function or an address range", "disasm <file> [addr] [--len N]",
+     re_cmd_disasm, true},
     {"demangle", "demangle one C++ symbol, no file needed", "demangle <symbol>", re_cmd_demangle,
      false},
     {"hexdump", "raw bytes at a file offset", "hexdump <file> --off N --len N", re_cmd_hexdump,
@@ -159,4 +163,17 @@ bool re_cmd_parse(re_ctx_t *ctx, int argc, char **argv, int *first_positional, r
     }
     *first_positional = pos;
     return true;
+}
+
+const char *re_cmd_positional(int argc, char **argv, int from) {
+    int i = from;
+    while (i < argc) {
+        re_str_t a = re_str(argv[i]);
+        if (re_str_starts_cstr(a, "--")) {
+            i += 2; // the flag and the value it consumed
+            continue;
+        }
+        return argv[i];
+    }
+    return NULL;
 }

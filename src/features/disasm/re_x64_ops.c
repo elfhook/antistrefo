@@ -160,6 +160,14 @@ static bool x64_vt_decode(void *ctx, uint64_t addr, re_span_t code, re_insn_t *o
     out->target = in.target;
     out->mem = in.mem;
     out->has_mem = in.rip_rel;
+    out->is_mem = in.is_mem;
+    out->mod = in.mod;
+    out->reg = in.reg;
+    out->rm = in.rm;
+    out->base = in.base;
+    out->index = in.index;
+    out->scale = in.scale;
+    out->disp = in.disp;
     out->ops[0] = X64_ID_OP(in.id);
     out->ops[1] = in.map;
     out->ops[2] = (uint8_t)(((unsigned)in.modrm >> 3) & 7u);

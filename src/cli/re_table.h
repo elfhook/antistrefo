@@ -56,6 +56,13 @@ const re_cmd_t *re_cmd_find(const char *name);
 // so a command only ever sees the positional path.
 bool re_cmd_parse(re_ctx_t *ctx, int argc, char **argv, int *first_positional, re_err_t *err);
 
+// The first positional argument at or after from, or NULL. A command receives the
+// file as argv[0] and then the remaining tokens *including any flags*, so a
+// command that wants an address has to skip the flags itself. A flag is assumed
+// to take the token after it, which is true of every flag this CLI defines, and is
+// far better than reading a flag's value as the address.
+const char *re_cmd_positional(int argc, char **argv, int from);
+
 // Write the envelope every response carries, so no command can forget it.
 void re_cmd_begin(re_ctx_t *ctx, re_strbuf_t *head);
 #ifdef __cplusplus

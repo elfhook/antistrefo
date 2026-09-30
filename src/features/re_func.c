@@ -116,6 +116,8 @@ static void take_edge(walk_t *w, re_vec_t *blocks, const re_insn_t *in, re_func_
         else {
             f->n_jumps++;
             f->flags |= RE_FUNC_JTABLE;
+            if (!f->dispatch)
+                f->dispatch = in->addr;
         }
         return;
     }
@@ -148,6 +150,7 @@ static void walk_func(walk_t *w, uint64_t start, re_func_t *f) {
     re_vec_init(&blocks, sizeof(uint64_t));
     push_u64(w->a, &blocks, start);
     f->va = start;
+    f->dispatch = 0;
     f->rva = (uint32_t)(start - w->code->base);
     f->n_insns = 0;
     f->n_calls = 0;

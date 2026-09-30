@@ -84,7 +84,8 @@ static void emit_hits(re_ctx_t *ctx, re_span_t img, re_format_t fmt, re_search_t
 int re_cmd_search(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     // argv[0] is the file, which main already passed as path, so the pattern is
     // the second argument. Reading argv[0] here searched for the file name.
-    if (argc < 2) {
+    const char *pat_arg = re_cmd_positional(argc, argv, 1);
+    if (!pat_arg) {
         RE_ERR_SET(ctx->err, RE_E_USAGE, "search needs a pattern, usage: search <file> <pattern>");
         return re_err_exit_code(RE_E_USAGE);
     }
@@ -97,7 +98,7 @@ int re_cmd_search(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     re_span_t img = f.whole;
     re_format_t fmt = re_format_detect(img);
     re_str_t pat;
-    re_search_kind_t kind = search_kind(re_str(argv[1]), &pat);
+    re_search_kind_t kind = search_kind(re_str(pat_arg), &pat);
     re_search_t s;
     re_search_init(&s);
     if (kind == RE_SEARCH_BYTES) {

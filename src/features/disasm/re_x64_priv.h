@@ -35,6 +35,11 @@ typedef enum {
     XC_3DNOW,     // 0F 0F, ModRM then a trailing imm8 selector
 } x64_class_t;
 
+// A decomposed memory operand. Kept on the instruction so text rendering and the
+// emitter never have to re-parse the ModRM, and so neither can disagree about it.
+#define RE_REG_NONE 0xFFu
+#define RE_REG_RIP 0x10u
+
 // A decoded instruction, before it is projected onto the arch neutral re_insn_t.
 typedef struct {
     uint16_t id;      // map in the high bits, opcode in the low
@@ -43,6 +48,13 @@ typedef struct {
     uint8_t cls;      // x64_class_t
     uint8_t modrm;    // 0 when the instruction has no ModRM
     bool has_modrm;   // separate from modrm, because a ModRM byte can be 0x00
+    uint8_t reg;      // the ModRM reg field, extended by REX.R
+    uint8_t rm;       // the ModRM rm field, extended by REX.B
+    uint8_t mod;      // the ModRM mod field: 3 means register, otherwise memory
+    uint8_t base;     // memory base register, or RE_REG_NONE
+    uint8_t index;    // memory index register, or RE_REG_NONE
+    uint8_t scale;    // index scale: 1, 2, 4 or 8
+    bool is_mem;      // the ModRM operand is memory rather than a register
     uint8_t rex;      // REX byte, 0 when absent
     uint8_t size;     // bytes consumed from the span
     uint8_t opsize;   // operand size in bytes: 2, 4 or 8

@@ -8,6 +8,7 @@
 #include "features/re_disasm.h"
 #include "features/re_format.h"
 #include "features/re_func.h"
+#include "features/re_jtable.h"
 #include "features/re_pe.h"
 #include "features/re_xref.h"
 #include "utils/re_json.h"
@@ -85,6 +86,8 @@ static void emit_func(re_jw_t *w, const re_func_t *f, size_t edges) {
     re_jw_ku64(w, "calls", f->n_calls);
     re_jw_ku64(w, "jumps", f->n_jumps);
     re_jw_ku64(w, "out_edges", edges);
+    if (f->dispatch)
+        re_jw_khex(w, "dispatch", f->dispatch, 16);
     emit_flags(w, f->flags);
     re_jw_obj_end(w);
 }
@@ -237,11 +240,12 @@ int re_cmd_xrefs(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     uint64_t span = 0;
     // argv[0] is the file, which main already passed as path, so an address is
     // the second argument. With only the file there is nothing to look up.
-    bool have = argc >= 2;
+    const char *pos = re_cmd_positional(argc, argv, 1);
+    bool have = pos != NULL;
     if (!prepare(ctx, path, &f, &pe, &code))
         return re_err_exit_code(ctx->err->code);
     if (have)
-        want = re_str(argv[1]);
+        want = re_str(pos);
     re_func_scan(&code, ctx->arena, &scan);
     re_xref_build(&code, &scan, &pe, ctx->arena, &xs);
     if (have && !parse_addr(ctx, want, &pe, &subject)) {
@@ -278,6 +282,152 @@ int re_cmd_xrefs(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     emit_side(&w, &xs, &scan, "refers_to", true, subject, span, &outof);
     re_jw_ku64(&w, "total", RE_VEC_LEN(&into) + RE_VEC_LEN(&outof));
     re_jw_kbool(&w, "truncated", false);
+    re_jw_obj_end(&w);
+    re_jw_flush(&w, stdout);
+    re_file_close(&f);
+    return 0;
+}
+
+// Every jump table found, with its case targets. The count is only reported when
+// the run of targets ended, so this never invents a case number.
+int re_cmd_jtables(re_ctx_t *ctx, const char *path, int argc, char **argv) {
+    re_file_t f;
+    re_pe_t pe;
+    re_code_t code;
+    re_fscan_t scan;
+    re_vec_t tables;
+    (void)argc;
+    (void)argv;
+    if (!prepare(ctx, path, &f, &pe, &code))
+        return re_err_exit_code(ctx->err->code);
+    re_vec_init(&tables, sizeof(re_jtable_t));
+    re_func_scan(&code, ctx->arena, &scan);
+    size_t total = re_jtable_scan(&code, &scan, ctx->arena, &tables);
+    re_jw_t w;
+    re_jw_init(&w, ctx->arena);
+    envelope(&w, "jtables", f.whole, &pe);
+    re_jw_key(&w, "tables");
+    re_jw_arr(&w);
+    size_t shown = 0;
+    for (size_t i = 0; i < total && shown < ctx->limit; i++, shown++) {
+        const re_jtable_t *t = RE_VEC_PTR(&tables, re_jtable_t, i);
+        re_jw_obj(&w);
+        re_jw_khex(&w, "table", t->table_va, 16);
+        re_jw_ku64(&w, "table_rva", t->table_va - code.base);
+        re_jw_khex(&w, "dispatch", t->at, 16);
+        re_jw_khex(&w, "func", t->func_va, 16);
+        re_jw_ku64(&w, "entries", t->count);
+        re_jw_ku64(&w, "entry_width", t->width);
+        re_jw_ku64(&w, "encoding", t->encoding);
+        // The bounds check in front of the dispatch counts the cases the source
+        // spells out, which for a two level table is more than the entries. Both
+        // are reported because neither alone describes the switch.
+        re_jw_ku64(&w, "case_max", t->bound);
+        re_jw_key(&w, "targets");
+        re_jw_arr(&w);
+        for (uint32_t k = 0; k < t->count && k < 64; k++)
+            re_jw_hex(&w, re_jtable_target(&code, t, k), 16);
+        re_jw_arr_end(&w);
+        re_jw_obj_end(&w);
+    }
+    re_jw_arr_end(&w);
+    re_jw_ku64(&w, "total", total);
+    re_jw_kbool(&w, "truncated", shown < total);
+    re_jw_obj_end(&w);
+    re_jw_flush(&w, stdout);
+    re_file_close(&f);
+    return 0;
+}
+// Where to start, and how many bytes to cover. With no address the entry point is
+// the subject, and a function subject is bounded by the function rather than run on
+// into whatever data follows it.
+static bool disasm_span(re_ctx_t *ctx, const re_pe_t *pe, const char *pos, uint64_t *at,
+                        uint64_t *span) {
+    if (pos) {
+        if (!parse_addr(ctx, re_str(pos), pe, at))
+            return false;
+        *span = ctx->len ? ctx->len : 256;
+        return true;
+    }
+    if (!pe->entry_rva) {
+        RE_ERR_SET(ctx->err, RE_E_MALFORMED, "no entry point, pass an address");
+        return false;
+    }
+    *at = pe->image_base + pe->entry_rva;
+    *span = ctx->len ? ctx->len : 256;
+    return true;
+}
+
+// One instruction, rendered and emitted. Text is the backend's job, reached
+// through the vtable, so a caller never needs to know which architecture it is
+// looking at.
+static void emit_insn(re_ctx_t *ctx, re_code_t *code, re_strbuf_t *line, re_jw_t *w, uint64_t va,
+                      const re_insn_t *in) {
+    re_strbuf_clear(line);
+    code->dis->render(code->dis->ctx, in, ctx->arena, line);
+    re_jw_obj(w);
+    re_jw_khex(w, "va", va, 16);
+    re_jw_ku64(w, "rva", va - code->base);
+    re_jw_ku64(w, "len", in->size);
+    re_jw_kstr(w, "text", re_str(line->p ? line->p : ""));
+    re_jw_kcstr(w, "kind",
+                in->is_return   ? "ret"
+                : in->is_call   ? "call"
+                : in->is_branch ? "branch"
+                                : "other");
+    if (in->has_target)
+        re_jw_khex(w, "target", in->target, 16);
+    if (in->imm)
+        re_jw_khex(w, "imm", (uint64_t)in->imm, 16);
+    if (in->has_mem)
+        re_jw_khex(w, "mem", in->mem, 16);
+    re_jw_obj_end(w);
+}
+
+// Disassemble from an address, or the entry point when none is given. The listing
+// covers one function so a stray data byte cannot masquerade as an instruction.
+int re_cmd_disasm(re_ctx_t *ctx, const char *path, int argc, char **argv) {
+    re_file_t f;
+    re_pe_t pe;
+    re_code_t code;
+    re_fscan_t scan;
+    re_strbuf_t line;
+    uint64_t at = 0;
+    uint64_t span = 256;
+    size_t shown = 0;
+    if (!prepare(ctx, path, &f, &pe, &code))
+        return re_err_exit_code(ctx->err->code);
+    re_func_scan(&code, ctx->arena, &scan);
+    if (!disasm_span(ctx, &pe, re_cmd_positional(argc, argv, 1), &at, &span)) {
+        re_file_close(&f);
+        return re_err_exit_code(ctx->err->code);
+    }
+    long fi = re_func_index_of(&scan, at);
+    if (fi >= 0 && !ctx->len) {
+        span = re_func_at(&scan, (size_t)fi)->size;
+        if (span > 512)
+            span = 512;
+    }
+    re_strbuf_init(&line, ctx->arena);
+    re_jw_t w;
+    re_jw_init(&w, ctx->arena);
+    envelope(&w, "disasm", f.whole, &pe);
+    re_jw_khex(&w, "start", at, 16);
+    if (fi >= 0)
+        re_jw_ku64(&w, "func", (uint64_t)fi);
+    re_jw_key(&w, "insns");
+    re_jw_arr(&w);
+    for (uint64_t va = at; va < at + span && shown < ctx->limit;) {
+        re_insn_t in;
+        if (!re_code_insn(&code, va, &in))
+            break;
+        emit_insn(ctx, &code, &line, &w, va, &in);
+        va += in.size;
+        shown++;
+    }
+    re_jw_arr_end(&w);
+    re_jw_ku64(&w, "total", shown);
+    re_jw_kbool(&w, "truncated", shown >= ctx->limit);
     re_jw_obj_end(&w);
     re_jw_flush(&w, stdout);
     re_file_close(&f);

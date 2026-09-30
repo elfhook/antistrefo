@@ -22,6 +22,8 @@ int re_cmd_rules(re_ctx_t *ctx, const char *path, int argc, char **argv);
 int re_cmd_entropy(re_ctx_t *ctx, const char *path, int argc, char **argv);
 int re_cmd_funcs(re_ctx_t *ctx, const char *path, int argc, char **argv);
 int re_cmd_xrefs(re_ctx_t *ctx, const char *path, int argc, char **argv);
+int re_cmd_jtables(re_ctx_t *ctx, const char *path, int argc, char **argv);
+int re_cmd_disasm(re_ctx_t *ctx, const char *path, int argc, char **argv);
 #ifdef __cplusplus
 }
 #endif

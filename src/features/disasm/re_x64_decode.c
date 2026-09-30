@@ -116,44 +116,105 @@ static bool x64_class(uint8_t map, uint8_t op, uint8_t *cls) {
     return true;
 }
 
+// mod zero with rm 5 is the RIP relative form in 64-bit mode and a plain absolute
+// address in 32-bit mode. Either way it costs four displacement bytes.
+static bool x64_rip_rel(const uint8_t *p, size_t n, size_t *i, x64_insn_t *in) {
+    uint64_t d = 0;
+    if (!rdn(p, n, i, 4, &d))
+        return false;
+    in->rip_rel = in->addrsize == 8;
+    // Signed, because a reference backwards to an earlier table or string is the
+    // common case and an unsigned displacement would point a gigabyte away.
+    if (in->rip_rel) {
+        in->disp = (int64_t)(int32_t)(uint32_t)d;
+        in->base = RE_REG_RIP;
+    }
+    return true;
+}
+
+// The SIB byte, which supplies the scale, the index and sometimes the base. A SIB
+// with no base and mod zero is a pure displacement, which sets *done because that
+// displacement is the whole address and the caller must not add a second one.
+static bool x64_sib(const uint8_t *p, size_t n, size_t *i, x64_insn_t *in, unsigned mod,
+                    uint8_t rex_x, uint8_t rex_b, bool *done) {
+    uint8_t sib;
+    *done = false;
+    if (!rd8(p, n, i, &sib))
+        return false;
+    in->scale = (uint8_t)(1u << ((unsigned)(sib >> 6) & 3u));
+    // Index field 4 means no index at all, unless REX.X says otherwise. Reading
+    // it as esp instead is how an operand ends up naming the same register twice.
+    if (((unsigned)(sib >> 3) & 7u) == 4u && rex_x == 0)
+        in->index = RE_REG_NONE;
+    else
+        in->index = (uint8_t)(((unsigned)(sib >> 3) & 7u) + rex_x);
+    if (mod == 0 && (unsigned)(sib & 7u) == 5u) {
+        uint64_t d = 0;
+        if (!rdn(p, n, i, 4, &d))
+            return false;
+        in->disp = (int64_t)(int32_t)(uint32_t)d;
+        in->base = RE_REG_NONE;
+        *done = true;
+        return true;
+    }
+    in->base = (uint8_t)(((unsigned)(sib & 7u) + rex_b));
+    return true;
+}
+
+// The displacement, whose width the mod field fixes: none, one byte, or four.
+static bool x64_disp(const uint8_t *p, size_t n, size_t *i, x64_insn_t *in, unsigned mod) {
+    uint64_t d = 0;
+    if (mod == 0)
+        return true;
+    if (mod == 1) {
+        if (!rdn(p, n, i, 1, &d))
+            return false;
+        in->disp = (int64_t)(int8_t)(uint8_t)d;
+        return true;
+    }
+    if (!rdn(p, n, i, 4, &d))
+        return false;
+    in->disp = (int64_t)(int32_t)(uint32_t)d;
+    return true;
+}
+
 // ModRM, and the SIB and displacement it drags in. RIP relative addressing is the
-// one case worth flagging, because it is how a 64-bit binary points at its own data.
+// one case worth flagging, because it is how a 64-bit binary points at its own
+// data. Every register number here is extended by REX.R or REX.B, so a consumer
+// never has to remember to apply the prefix itself.
 static bool x64_modrm(const uint8_t *p, size_t n, size_t *i, x64_insn_t *in) {
     uint8_t modrm;
     unsigned mod;
     unsigned rm;
+    uint8_t rex_r = (uint8_t)((in->rex & 0x04u) ? 8u : 0u);
+    uint8_t rex_x = (uint8_t)((in->rex & 0x02u) ? 8u : 0u);
+    uint8_t rex_b = (uint8_t)((in->rex & 0x01u) ? 8u : 0u);
     if (!rd8(p, n, i, &modrm))
         return false;
     in->modrm = modrm;
     mod = (unsigned)(modrm >> 6);
     rm = (unsigned)(modrm & 7u);
+    in->mod = (uint8_t)mod;
+    in->reg = (uint8_t)(((unsigned)(modrm >> 3) & 7u) + rex_r);
+    in->rm = (uint8_t)(rm + rex_b);
+    in->base = RE_REG_NONE;
+    in->index = RE_REG_NONE;
+    in->scale = 1;
+    in->is_mem = mod != 3u;
     if (mod == 3)
         return true;
-    if (mod == 0 && rm == 5) {
-        // With a 64-bit address this is RIP relative; with a 32-bit one it is a
-        // plain absolute address, and either way it costs four displacement bytes.
-        uint64_t d = 0;
-        if (!rdn(p, n, i, 4, &d))
-            return false;
-        in->rip_rel = in->addrsize == 8;
-        // Signed, because a reference backwards to an earlier table or string is
-        // the common case and an unsigned displacement would point a gigabyte away.
-        if (in->rip_rel)
-            in->disp = (int64_t)(int32_t)(uint32_t)d;
-        return true;
-    }
+    if (mod == 0 && rm == 5)
+        return x64_rip_rel(p, n, i, in);
     if (rm == 4) {
-        uint8_t sib;
-        if (!rd8(p, n, i, &sib))
+        bool done = false;
+        if (!x64_sib(p, n, i, in, mod, rex_x, rex_b, &done))
             return false;
-        if (mod == 0 && (unsigned)(sib & 7u) == 5u)
-            return rdn(p, n, i, 4, &(uint64_t){0});
+        if (done)
+            return true;
+    } else {
+        in->base = in->rm;
     }
-    if (mod == 1)
-        return rdn(p, n, i, 1, &(uint64_t){0});
-    if (mod == 2)
-        return rdn(p, n, i, 4, &(uint64_t){0});
-    return true;
+    return x64_disp(p, n, i, in, mod);
 }
 
 // Immediate width in bytes. The 0x66 prefix narrows 16 and 32, and REX.W widens
@@ -207,6 +268,13 @@ static void blank(x64_insn_t *in) {
     in->cls = XC_BAD;
     in->modrm = 0;
     in->has_modrm = false;
+    in->reg = 0;
+    in->rm = 0;
+    in->mod = 0;
+    in->base = RE_REG_NONE;
+    in->index = RE_REG_NONE;
+    in->scale = 1;
+    in->is_mem = false;
     in->rex = 0;
     in->map = 0;
     in->opcode = 0;

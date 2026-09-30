@@ -16,6 +16,11 @@ extern "C" {
 #include "utils/re_str.h"
 #include "utils/re_strbuf.h"
 
+// A register index of this means the addressing mode left that part out, which is
+// not the same as register zero.
+#define RE_REG_NONE 0xFFu
+#define RE_REG_RIP 0x10u
+
 #define RE_MAX_INSN_LEN 16
 
 typedef struct {
@@ -34,14 +39,30 @@ typedef struct {
     bool has_mem;        // mem is the effective address of the memory operand
     bool has_modrm;
     uint8_t modrm;
-    uint8_t opsize;  // operand size in bytes: 1, 2, 4 or 8
-    uint8_t rex;     // extension prefix, 0 when absent
+    uint8_t opsize; // operand size in bytes: 1, 2, 4 or 8
+    uint8_t rex;    // extension prefix, 0 when absent
+    // The memory operand, decomposed. is_mem is false for a register operand, and
+    // base and index are RE_REG_NONE when the addressing mode leaves them out.
+    bool is_mem;
+    uint8_t mod;
+    uint8_t reg; // ModRM reg field, already extended by REX.R
+    uint8_t rm;  // ModRM rm field, already extended by REX.B
+    uint8_t base;
+    uint8_t index;
+    uint8_t scale;
+    int64_t disp;
     int64_t imm;     // immediate value, or the relative offset of a branch
     uint64_t target; // resolved branch or call destination
     uint64_t mem;    // effective address of a RIP relative memory operand
     uint8_t ops[4];  // architecture specific operand encodings
     re_str_t text;   // owned by the caller's arena, may be NULL
 } re_insn_t;
+
+// The opcode identity, readable without an architecture private header. The map
+// is 0 for a one byte opcode, 1 for 0F, 2 for 0F38 and 3 for 0F3A. Arch neutral
+// code asks what an instruction is through these, never through a private macro.
+#define RE_INSN_MAP(i) ((i)->ops[1])
+#define RE_INSN_OPCODE(i) ((i)->ops[0])
 
 typedef struct re_disasm {
     void *ctx;

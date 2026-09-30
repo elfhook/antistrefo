@@ -49,6 +49,7 @@ typedef struct {
 
 typedef struct {
     uint64_t va;
+    uint64_t dispatch; // first indirect branch, 0 when there is none
     uint32_t rva;
     uint32_t size;       // bytes from va to the highest address walked
     uint32_t frame_size; // stack bytes reserved, 0 when there is no frame
