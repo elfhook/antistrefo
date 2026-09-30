@@ -18,6 +18,8 @@
 #include "utils/re_json.h"
 #include "utils/re_text.h"
 #include "utils/re_util.h"
+#include "cli/re_render.h"
+#include "cli/re_report.h"
 
 #define SCHEMA "antistrefo/1"
 
@@ -88,6 +90,8 @@ static void finish(re_ctx_t *ctx, re_jw_t *w, re_loaded_t *l) {
 int re_cmd_info(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     (void)argc;
     (void)argv;
+    if (re_report_wanted(ctx))
+        return re_render_info(ctx, path);
     re_loaded_t l;
     re_err_code_t e = load(&l, ctx, path, true, false);
     if (e != RE_OK) {
@@ -194,6 +198,8 @@ static int sections_text(re_loaded_t *l, re_ctx_t *ctx) {
 }
 
 int re_cmd_sections(re_ctx_t *ctx, const char *path, int argc, char **argv) {
+    if (re_report_wanted(ctx))
+        return re_render_sections(ctx, path);
     (void)argc;
     (void)argv;
     re_loaded_t l;
@@ -234,6 +240,8 @@ int re_cmd_sections(re_ctx_t *ctx, const char *path, int argc, char **argv) {
 }
 
 int re_cmd_imports(re_ctx_t *ctx, const char *path, int argc, char **argv) {
+    if (re_report_wanted(ctx))
+        return re_render_imports(ctx, path);
     (void)argc;
     (void)argv;
     re_loaded_t l;

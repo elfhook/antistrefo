@@ -21,3 +21,14 @@ if(MSVC)
     target_compile_definitions(re_test_disasm PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 add_test(NAME disasm COMMAND re_test_disasm)
+
+# The layout suite is separate for the same reason: a box that is one column short
+# should name itself in the CTest output rather than hiding in the utility counts.
+add_executable(re_test_tui test_tui.c)
+target_link_libraries(re_test_tui PRIVATE re_core re_utils re_flags)
+if(MSVC)
+    set_property(TARGET re_test_tui
+        PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    target_compile_definitions(re_test_tui PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+add_test(NAME tui COMMAND re_test_tui)

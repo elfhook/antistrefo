@@ -21,6 +21,9 @@ extern "C" {
 #define RE_CMD_MAX_ARGS 16
 
 typedef enum {
+    // The default is JSON because the parse layer cannot know whether stdout is a
+    // terminal, and guessing wrong breaks a pipe. The renderers ask
+    // re_report_wanted, which resolves the default against the real stdout.
     RE_FMT_OUT_JSON = 0,
     RE_FMT_OUT_TEXT,
 } re_out_fmt_t;
@@ -34,6 +37,7 @@ typedef struct re_ctx {
     uint64_t len;   // hexdump length
     re_str_t regex; // empty when no filter was given
     bool has_regex;
+    bool no_color; // --no-color, which also honours the NO_COLOR convention
     re_err_t *err;
 } re_ctx_t;
 

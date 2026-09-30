@@ -128,6 +128,7 @@ bool re_cmd_parse(re_ctx_t *ctx, int argc, char **argv, int *first_positional, r
     ctx->off = 0;
     ctx->len = 256;
     ctx->has_regex = false;
+    ctx->no_color = false;
     int pos = argc;
     for (int i = 0; i < argc; i++) {
         re_str_t a = re_str(argv[i]);
@@ -158,6 +159,11 @@ bool re_cmd_parse(re_ctx_t *ctx, int argc, char **argv, int *first_positional, r
                 return false;
             }
             val = argv[++i];
+        } else if (re_str_eq_cstr(a, "--no-color")) {
+            // The one flag with no value, because a flag that can be spelled two ways
+            // for the same thing is a flag someone will get wrong.
+            ctx->no_color = true;
+            continue;
         } else {
             RE_ERR_SETF(err, RE_E_USAGE, "unknown flag %s", argv[i]);
             return false;

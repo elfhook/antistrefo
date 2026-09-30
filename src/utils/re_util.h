@@ -30,6 +30,7 @@ extern "C" {
 #include "utils/re_strbuf.h"
 #include "utils/re_text.h"
 #include "utils/re_time.h"
+#include "utils/re_tui.h"
 #include "utils/re_vec.h"
 #ifdef __cplusplus
 }
