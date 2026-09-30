@@ -4,6 +4,8 @@
 // Depends: re_code, re_func, re_xref, re_disasm. One JSON object on stdout.
 #include "cli/re_cmds3.h"
 
+#include "cli/re_prep.h"
+
 #include "features/re_code.h"
 #include "features/re_disasm.h"
 #include "features/re_flirt.h"
@@ -16,46 +18,7 @@
 #include "utils/re_json.h"
 #include "utils/re_strbuf.h"
 
-#define SCHEMA3 "antistrefo/1"
-
-// The architecture name the code map was built for. A single backend exists in
-// task 3, so this is the first one rather than a lookup, and it stays honest
-// because the map would have failed to initialise without it.
-static const char *arch_name(void) {
-    return re_disasm_arch_count() > 0 ? re_disasm_arch_name(0) : "none";
-}
-
-// Open the file, parse the PE, and stand up the code map. Everything the three
-// commands need comes from here, so a failure is reported once with one message.
-static bool prepare(re_ctx_t *ctx, const char *path, re_file_t *f, re_pe_t *pe, re_code_t *code) {
-    re_err_code_t e = re_file_open(path, ctx->arena, f);
-    if (e != RE_OK) {
-        RE_ERR_SETF(ctx->err, e, "cannot open %s", path);
-        return false;
-    }
-    e = re_pe_parse(f->whole, ctx->arena, pe);
-    if (e != RE_OK) {
-        RE_ERR_SETF(ctx->err, e, "cannot parse %s", path);
-        return false;
-    }
-    const re_disasm_t *d = re_disasm_find("x86-64");
-    if (!re_code_init(code, f->whole, pe, d, ctx->arena)) {
-        RE_ERR_SET(ctx->err, RE_E_UNSUPPORTED, "no x86-64 disassembler in this build");
-        return false;
-    }
-    return true;
-}
-
-static void envelope(re_jw_t *w, const char *tool, re_span_t img, const re_pe_t *pe) {
-    re_jw_obj(w);
-    re_jw_kcstr(w, "schema", SCHEMA3);
-    re_jw_kcstr(w, "tool", tool);
-    re_jw_kcstr(w, "format", re_format_name(re_format_detect(img)));
-    re_jw_kcstr(w, "arch", arch_name());
-    re_jw_ku64(w, "size", img.n);
-    re_jw_ku64(w, "image_base", pe->image_base);
-}
-
+#include "cli/re_cmds3.h"
 // The flags a function carries, as names rather than a bitmask, because a caller
 // reading this should not have to know which bit means prologue.
 static void emit_flags(re_jw_t *w, uint32_t flags) {
@@ -120,7 +83,7 @@ int re_cmd_funcs(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     re_xrefset_t xs;
     (void)argc;
     (void)argv;
-    if (!prepare(ctx, path, &f, &pe, &code))
+    if (!re_prepare(ctx, path, &f, &pe, &code))
         return re_err_exit_code(ctx->err->code);
     re_func_scan(&code, ctx->arena, &scan);
     re_xref_build(&code, &scan, &pe, ctx->arena, &xs);
@@ -132,7 +95,7 @@ int re_cmd_funcs(re_ctx_t *ctx, const char *path, int argc, char **argv) {
         re_flirt_load(ctx->arena, sigfile, &sigs);
     re_jw_t w;
     re_jw_init(&w, ctx->arena);
-    envelope(&w, "funcs", f.whole, &pe);
+    re_envelope(&w, "funcs", f.whole, &pe);
     re_jw_ku64(&w, "signatures", RE_VEC_LEN(&sigs));
     re_jw_key(&w, "functions");
     re_jw_arr(&w);
@@ -174,35 +137,6 @@ static void emit_ref_flags(re_jw_t *w, uint8_t flags) {
             re_jw_str(w, re_str(kNames[i].name));
     }
     re_jw_arr_end(w);
-}
-
-// Accepts a decimal or 0x hex address, as an RVA or already absolute. A value
-// that falls inside the image is taken as a virtual address and anything else as
-// an RVA. Guessing by magnitude does not work here: a driver mapped at 0x10000
-// has virtual addresses around 0x11000, which are just as small as the RVAs.
-static bool parse_addr(re_ctx_t *ctx, re_str_t s, const re_pe_t *pe, uint64_t *out) {
-    uint64_t acc = 0;
-    uint64_t mul = 10;
-    size_t i = 0;
-    if (s.n > 2 && s.p[0] == '0' && (s.p[1] == 'x' || s.p[1] == 'X')) {
-        mul = 16;
-        i = 2;
-    }
-    if (i >= s.n) {
-        RE_ERR_SET(ctx->err, RE_E_USAGE, "expected an address");
-        return false;
-    }
-    for (; i < s.n; i++) {
-        int d = re_hex_val(s.p[i]);
-        if (d < 0 || (uint64_t)d >= mul) {
-            RE_ERR_SETF(ctx->err, RE_E_USAGE, "cannot read an address from %s", s.p);
-            return false;
-        }
-        acc = acc * mul + (uint64_t)d;
-    }
-    bool in_image = acc >= pe->image_base && (acc - pe->image_base) < pe->size_of_image;
-    *out = in_image ? acc : pe->image_base + acc;
-    return true;
 }
 
 static const char *kind_name(uint8_t k) {
@@ -275,19 +209,19 @@ int re_cmd_xrefs(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     // the second argument. With only the file there is nothing to look up.
     const char *pos = re_cmd_positional(argc, argv, 1);
     bool have = pos != NULL;
-    if (!prepare(ctx, path, &f, &pe, &code))
+    if (!re_prepare(ctx, path, &f, &pe, &code))
         return re_err_exit_code(ctx->err->code);
     if (have)
         want = re_str(pos);
     re_func_scan(&code, ctx->arena, &scan);
     re_xref_build(&code, &scan, &pe, ctx->arena, &xs);
-    if (have && !parse_addr(ctx, want, &pe, &subject)) {
+    if (have && !re_parse_addr(ctx, want, &pe, &subject)) {
         re_file_close(&f);
         return re_err_exit_code(RE_E_USAGE);
     }
     re_jw_t w;
     re_jw_init(&w, ctx->arena);
-    envelope(&w, "xrefs", f.whole, &pe);
+    re_envelope(&w, "xrefs", f.whole, &pe);
     re_jw_ku64(&w, "refs", RE_VEC_LEN(&xs.fwd));
     re_jw_ku64(&w, "indirect", xs.n_indirect);
     if (!have) {
@@ -331,14 +265,14 @@ int re_cmd_jtables(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     re_vec_t tables;
     (void)argc;
     (void)argv;
-    if (!prepare(ctx, path, &f, &pe, &code))
+    if (!re_prepare(ctx, path, &f, &pe, &code))
         return re_err_exit_code(ctx->err->code);
     re_vec_init(&tables, sizeof(re_jtable_t));
     re_func_scan(&code, ctx->arena, &scan);
     size_t total = re_jtable_scan(&code, &scan, ctx->arena, &tables);
     re_jw_t w;
     re_jw_init(&w, ctx->arena);
-    envelope(&w, "jtables", f.whole, &pe);
+    re_envelope(&w, "jtables", f.whole, &pe);
     re_jw_key(&w, "tables");
     re_jw_arr(&w);
     size_t shown = 0;
@@ -377,7 +311,7 @@ int re_cmd_jtables(re_ctx_t *ctx, const char *path, int argc, char **argv) {
 static bool disasm_span(re_ctx_t *ctx, const re_pe_t *pe, const char *pos, uint64_t *at,
                         uint64_t *span) {
     if (pos) {
-        if (!parse_addr(ctx, re_str(pos), pe, at))
+        if (!re_parse_addr(ctx, re_str(pos), pe, at))
             return false;
         *span = ctx->len ? ctx->len : 256;
         return true;
@@ -428,7 +362,7 @@ int re_cmd_disasm(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     uint64_t at = 0;
     uint64_t span = 256;
     size_t shown = 0;
-    if (!prepare(ctx, path, &f, &pe, &code))
+    if (!re_prepare(ctx, path, &f, &pe, &code))
         return re_err_exit_code(ctx->err->code);
     re_func_scan(&code, ctx->arena, &scan);
     if (!disasm_span(ctx, &pe, re_cmd_positional(argc, argv, 1), &at, &span)) {
@@ -444,7 +378,7 @@ int re_cmd_disasm(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     re_strbuf_init(&line, ctx->arena);
     re_jw_t w;
     re_jw_init(&w, ctx->arena);
-    envelope(&w, "disasm", f.whole, &pe);
+    re_envelope(&w, "disasm", f.whole, &pe);
     re_jw_khex(&w, "start", at, 16);
     if (fi >= 0)
         re_jw_ku64(&w, "func", (uint64_t)fi);

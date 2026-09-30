@@ -72,6 +72,23 @@ static const char *size_kw(const re_insn_t *in, unsigned reg_bytes) {
     return "";
 }
 
+// Does this form print an immediate? The opcode decides, not whether the immediate
+// happens to be non zero: "and qword [rax+0x18], 0" and "mov eax, 0" both have a
+// meaningful zero operand, and dropping it would make the listing disagree with the
+// bytes it claims to be showing.
+static bool form_has_imm(const re_insn_t *in) {
+    unsigned op = X64_ID_OP(in->insn_id);
+    unsigned map = X64_ID_MAP(in->insn_id);
+    if (map == 0 && op >= 0x80 && op <= 0x83)
+        return true;
+    if (map == 0 && op <= 0x3D)
+        return (op & 7u) == 4u || (op & 7u) == 5u;
+    if (map == 0 &&
+        (op == 0x68 || op == 0x6A || (op >= 0xB0 && op <= 0xB7) || op == 0xC6 || op == 0xC7))
+        return true;
+    return (op == 0x81 || op == 0xA9 || op == 0xBA || op == 0xC1 || op == 0xF6 || op == 0xF7);
+}
+
 static void put_reg(re_strbuf_t *out, const re_insn_t *in, unsigned reg) {
     const char *n = x64_reg_name_ex(reg, (uint8_t)in->opsize, in->rex);
     re_strbuf_puts(out, n ? n : "?");
@@ -160,7 +177,7 @@ static void put_operands(re_strbuf_t *out, const re_insn_t *in, const char *m) {
             put_reg(out, in, r);
             return;
         }
-        if (in->imm)
+        if (form_has_imm(in))
             put_imm(out, in->imm);
         return;
     }
@@ -174,7 +191,7 @@ static void put_operands(re_strbuf_t *out, const re_insn_t *in, const char *m) {
     re_strbuf_puts(out, " ");
     if (is_group(in)) {
         put_rm(out, in);
-        if (in->imm) {
+        if (form_has_imm(in)) {
             re_strbuf_puts(out, ", ");
             put_imm(out, in->imm);
         }

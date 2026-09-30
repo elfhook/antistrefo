@@ -12,8 +12,6 @@
 static const uint8_t kMsArgs[4] = {1, 2, 8, 9};         // rcx, rdx, r8, r9
 static const uint8_t kSysvArgs[6] = {7, 6, 2, 1, 8, 9}; // rdi, rsi, rdx, rcx, r8, r9
 
-#define RE_SLOT_MAX 64
-
 typedef struct {
     bool written[16];
     bool arg_seen[16]; // read before anything wrote it, so it arrived as input
@@ -158,6 +156,8 @@ static uint32_t score(const flow_t *fl, const uint8_t *set, size_t n, uint8_t *o
 
 static void count_locals(const flow_t *fl, re_stack_t *out) {
     out->n_locals = fl->n_slots;
+    for (uint32_t i = 0; i < fl->n_slots && i < RE_SLOT_MAX; i++)
+        out->slots[i] = fl->slots[i];
 }
 
 void re_stack_analyze(re_code_t *c, const re_func_t *f, re_arena_t *a, re_stack_t *out) {

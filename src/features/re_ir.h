@@ -31,6 +31,9 @@ typedef struct {
 } re_varnode_t;
 
 // The kind of an op, kept distinct from re_ir_op_t which is the op itself.
+// The arithmetic and comparison ops arrived in task 4, when the emitter needed
+// them: without them an expression cannot be written at all, because a register
+// transfer language with only CONST and VAR can only move values around.
 typedef enum {
     RE_OP_UNIMPL = 0, // an instruction the arch does not model yet
     RE_OP_CONST,      // out := const
@@ -44,7 +47,44 @@ typedef enum {
     RE_OP_CALLIND,    // indirect call
     RE_OP_INT,        // interrupt or trap
     RE_OP_MULTIEQUAL, // phi node at a control flow join
+    RE_OP_INTADD,     // out := in0 + in1
+    RE_OP_INTSUB,     // out := in0 - in1
+    RE_OP_INTMUL,     // out := in0 * in1
+    RE_OP_INTDIV,     // out := in0 / in1, signed
+    RE_OP_INTMOD,     // out := in0 % in1, signed
+    RE_OP_INTAND,     // out := in0 & in1
+    RE_OP_INTOR,      // out := in0 | in1
+    RE_OP_INTXOR,     // out := in0 ^ in1
+    RE_OP_INTSHL,     // out := in0 << in1
+    RE_OP_INTSHR,     // out := in0 >> in1, arithmetic
+    RE_OP_INTNEG,     // out := -in0
+    RE_OP_INT2BOOL,   // out := in0 != 0
+    RE_OP_SLICE,      // out := the low const_val bytes of in0
+    RE_OP_CAST,       // out := in0 widened or narrowed to out.size
+    RE_OP_CMP,        // out := the comparison, in extra as the condition code
+// Set in a CONST op's extra field when the constant exists only to be an operand of a
+// later op. The emitter uses it to decide between printing the value inline, which is
+// what a mov of an immediate does, and folding it away, which is what an address or
+// an immediate operand does. Guessing that from the op stream alone needs a lookahead
+// past one op, and a read modify write pushes the operand several ops ahead.
+#define RE_CONST_OPERAND 1u
+
 } re_op_kind_t;
+
+// Condition codes for RE_OP_CMP, matching the x86 condition names so an emitter
+// does not have to invent a mapping of its own.
+typedef enum {
+    RE_CC_OP_EQ = 0,
+    RE_CC_OP_NE,
+    RE_CC_OP_SLT,
+    RE_CC_OP_SLE,
+    RE_CC_OP_ULT,
+    RE_CC_OP_ULE,
+    RE_CC_OP_SGT,
+    RE_CC_OP_SGE,
+    RE_CC_OP_UGT,
+    RE_CC_OP_UGE,
+} re_cond_t;
 
 typedef struct {
     re_op_kind_t op;
@@ -72,6 +112,9 @@ typedef struct {
     re_ir_block_t *blocks;
     size_t n_blocks;
     size_t cap_blocks;
+    // A per function counter for temporaries. The IR is per function, so this is
+    // where a backend keeps its numbering, and it keeps lowering stateless.
+    uint32_t next_uniq;
     re_varnode_t *params;
     size_t n_params;
     re_varnode_t *rets;

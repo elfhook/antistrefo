@@ -5,18 +5,23 @@
 // test exercises the same seam a caller would.
 #include "re_test.h"
 
+#include <string.h>
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
 #include "features/re_disasm.h"
+#include "features/re_ir.h"
+#include "utils/re_arena.h"
 #include "utils/re_buf.h"
+#include "utils/re_hex.h"
 #include "utils/re_str.h"
 
 typedef struct {
     const char *name;
-    const char *bytes;  // escaped hex, two characters per byte
-    uint8_t len;        // instruction length in bytes
+    const char *bytes; // escaped hex, two characters per byte
+    uint8_t len;       // instruction length in bytes
     bool call;
     bool branch;
     bool cond;
@@ -122,17 +127,16 @@ static void test_vectors(void) {
         re_test_count++;
         if (in.size != t->len) {
             re_test_fail++;
-            printf("FAIL %s: length %u, want %u (%s)\n", t->name, in.size, t->len,
-                   t->bytes);
+            printf("FAIL %s: length %u, want %u (%s)\n", t->name, in.size, t->len, t->bytes);
             fflush(stdout);
         }
-        if (in.is_call != t->call || in.is_branch != t->branch ||
-            in.is_conditional != t->cond || in.is_return != t->ret) {
+        if (in.is_call != t->call || in.is_branch != t->branch || in.is_conditional != t->cond ||
+            in.is_return != t->ret) {
             re_test_fail++;
             printf("FAIL %s: flags c=%d b=%d cond=%d ret=%d, want c=%d b=%d cond=%d "
                    "ret=%d\n",
-                   t->name, in.is_call, in.is_branch, in.is_conditional, in.is_return,
-                   t->call, t->branch, t->cond, t->ret);
+                   t->name, in.is_call, in.is_branch, in.is_conditional, in.is_return, t->call,
+                   t->branch, t->cond, t->ret);
             fflush(stdout);
         }
     }
@@ -164,8 +168,7 @@ static void test_targets(void) {
         re_insn_t in;
         size_t n = cases[v].len;
         for (size_t i = 0; i < n; i++)
-            buf[i] = (uint8_t)((nib(cases[v].bytes[i * 2]) << 4) |
-                               nib(cases[v].bytes[i * 2 + 1]));
+            buf[i] = (uint8_t)((nib(cases[v].bytes[i * 2]) << 4) | nib(cases[v].bytes[i * 2 + 1]));
         if (!g_x64->decode(g_x64->ctx, 0x140001000ULL, re_span(buf, n), &in)) {
             RE_CHECK(0 && "decode refused a branch vector");
             continue;
@@ -178,11 +181,9 @@ static void test_targets(void) {
 // A truncated instruction must be refused, never read past the end. This is the
 // case that keeps a malformed image from walking off the mapping.
 static void test_truncated(void) {
-    static const char *const kShort[] = {"48",           "4883",         "4883ec",
-                                         "0f84",         "0f8401",       "e8",
-                                         "c2",           "c210",         "f30f1e",
-                                         "488b05",       "488b05341200", "69",
-                                         "c5",           "c5f8",         "0f38"};
+    static const char *const kShort[] = {"48",           "4883", "4883ec", "0f84",   "0f8401",
+                                         "e8",           "c2",   "c210",   "f30f1e", "488b05",
+                                         "488b05341200", "69",   "c5",     "c5f8",   "0f38"};
     for (size_t v = 0; v < sizeof(kShort) / sizeof(kShort[0]); v++) {
         uint8_t buf[8];
         re_insn_t in;
@@ -194,9 +195,8 @@ static void test_truncated(void) {
     // Opcodes that do not exist in 64-bit mode. The prefix bytes are deliberately
     // absent: a prefix followed by valid bytes is a valid instruction, and the
     // vectors above already cover lock, rep and the vector escapes.
-    static const uint8_t kBad[] = {0x06, 0x07, 0x0E, 0x16, 0x17, 0x1F, 0x27, 0x2F,
-                                   0x37, 0x3F, 0x60, 0x61, 0x82, 0x9A, 0xCE, 0xD4,
-                                   0xD5, 0xEA};
+    static const uint8_t kBad[] = {0x06, 0x07, 0x0E, 0x16, 0x17, 0x1F, 0x27, 0x2F, 0x37,
+                                   0x3F, 0x60, 0x61, 0x82, 0x9A, 0xCE, 0xD4, 0xD5, 0xEA};
     for (size_t v = 0; v < sizeof(kBad) / sizeof(kBad[0]); v++) {
         uint8_t buf[8] = {0};
         re_insn_t in;
@@ -224,20 +224,20 @@ static void test_indirect(void) {
 // missed function in the report.
 static void test_prologue(void) {
     static const char *const kYes[] = {
-        "f30f1efa",              // endbr64
-        "55",                    // push rbp
-        "4889e5",                // mov rbp,rsp
-        "4883ec28",              // sub rsp,0x28
-        "4883ec00010000",        // sub rsp,0x100
-        "f30f1efa55",            // endbr64 then push rbp
-        "55b8001000004883ec20",  // push rbp, mov eax, sub rsp
+        "f30f1efa",             // endbr64
+        "55",                   // push rbp
+        "4889e5",               // mov rbp,rsp
+        "4883ec28",             // sub rsp,0x28
+        "4883ec00010000",       // sub rsp,0x100
+        "f30f1efa55",           // endbr64 then push rbp
+        "55b8001000004883ec20", // push rbp, mov eax, sub rsp
     };
     static const char *const kNo[] = {
-        "b801000000",     // mov eax,1
-        "488b4508",       // mov rax,[rbp+8]
-        "c3",             // ret
-        "90",             // nop
-        "0f1f440000",     // multi byte nop
+        "b801000000", // mov eax,1
+        "488b4508",   // mov rax,[rbp+8]
+        "c3",         // ret
+        "90",         // nop
+        "0f1f440000", // multi byte nop
     };
     for (size_t v = 0; v < sizeof(kYes) / sizeof(kYes[0]); v++) {
         uint8_t buf[16];
@@ -274,6 +274,127 @@ static void test_registry(void) {
     RE_CHECK(g_x64->reg_name(g_x64->ctx, 0) != NULL);
 }
 
+// Decode one hex string into an instruction. Shared by the two probes below so they
+// cannot drift apart on how a vector is turned into bytes.
+static bool decode1(const char *hex, re_arena_t *a, re_insn_t *in, re_ir_func_t *f,
+                    re_ir_block_t **blk) {
+    uint8_t buf[16];
+    size_t nb = 0;
+    if (!re_hex_decode(buf, sizeof(buf), hex, strlen(hex), &nb, false))
+        return false;
+    if (!g_x64->decode(g_x64->ctx, 0x1000, re_span(buf, nb), in))
+        return false;
+    re_ir_func_init(f);
+    *blk = re_ir_block_begin(f, a, 0x1000, nb);
+    return *blk != NULL;
+}
+
+// Lower one instruction and report the kind of its LAST op, or -1 when the
+// instruction is not modelled at all, or -2 when the bytes did not decode. The last
+// op is the one that carries the operation: an instruction with an immediate or a
+// memory address emits its operands first, so the first op is a constant or an
+// address and says nothing about what the instruction does.
+static long lower1(const char *hex, re_arena_t *a) {
+    re_insn_t in;
+    re_ir_func_t f;
+    re_ir_block_t *b = NULL;
+    size_t n;
+    if (!decode1(hex, a, &in, &f, &b))
+        return -2;
+    n = g_x64->lower(g_x64->ctx, &in, &f, a);
+    if (!n)
+        return -1;
+    return (long)b->ops[n - 1].op;
+}
+
+// How many ops one instruction lowers to. Worth pinning on its own, because the count
+// is what shows a memory read modify write was expanded rather than dropped: five ops
+// where one instruction was decoded is the shape of a correct lowering, and one op
+// would be a value silently ignored.
+static size_t lowern(const char *hex, re_arena_t *a) {
+    re_insn_t in;
+    re_ir_func_t f;
+    re_ir_block_t *b = NULL;
+    if (!decode1(hex, a, &in, &f, &b))
+        return 0;
+    return g_x64->lower(g_x64->ctx, &in, &f, a);
+}
+
+// The vector of pin checks for the lowering, split by what each group is about so no
+// one function holds all of it. Each entry is a hex encoding and the kind of op it
+// must lower to; -1 means deliberately not modelled, which is a result too.
+static void test_lowering_ops(re_arena_t *a) {
+    // A move is a copy, an immediate is a constant, and a load names its address.
+    RE_CHECK_EQ_U((uint64_t)lower1("488bc3", a), RE_OP_VAR);           // mov rax,rbx
+    RE_CHECK_EQ_U((uint64_t)lower1("48c7c001000000", a), RE_OP_CONST); // mov rax,1
+    RE_CHECK_EQ_U((uint64_t)lower1("488b0512345678", a), RE_OP_LOAD);  // mov rax,[rip+..]
+    RE_CHECK_EQ_U((uint64_t)lower1("488d0512345678", a), RE_OP_VAR);   // lea rax,[rip+..]
+    // The group form takes its operation from the reg field, and the two carry forms
+    // are deliberately not modelled, so each of the eight is pinned separately.
+    RE_CHECK_EQ_U((uint64_t)lower1("4883c028", a), RE_OP_INTADD); // /0 add
+    RE_CHECK_EQ_U((uint64_t)lower1("4883c828", a), RE_OP_INTOR);  // /1 or
+    RE_CHECK_EQ_U((uint64_t)lower1("4883d028", a), (uint64_t)-1); // /2 adc
+    RE_CHECK_EQ_U((uint64_t)lower1("4883d828", a), (uint64_t)-1); // /3 sbb
+    RE_CHECK_EQ_U((uint64_t)lower1("4883e028", a), RE_OP_INTAND); // /4 and
+    RE_CHECK_EQ_U((uint64_t)lower1("4883e828", a), RE_OP_INTSUB); // /5 sub
+    RE_CHECK_EQ_U((uint64_t)lower1("4883f028", a), RE_OP_INTXOR); // /6 xor
+    RE_CHECK_EQ_U((uint64_t)lower1("4883f828", a), RE_OP_CMP);    // /7 cmp
+    // A compare against a register, and the zero test, are both comparisons, but the
+    // zero test also emits the constant it compares against.
+    RE_CHECK_EQ_U((uint64_t)lower1("4839d8", a), RE_OP_CMP); // cmp rax,rbx
+    RE_CHECK_EQ_U((uint64_t)lower1("4885c0", a), RE_OP_CMP); // test rax,rax
+    RE_CHECK_EQ_U(lowern("4839d8", a), 1);
+    RE_CHECK_EQ_U(lowern("4885c0", a), 2);
+}
+
+static void test_lowering_forms(re_arena_t *a) {
+    // A memory destination is a read modify write: the address, the load, the
+    // operation, the address again, and the store. One op here would be a lost value.
+    RE_CHECK_EQ_U((uint64_t)lower1("4801442410", a), RE_OP_STORE);
+    RE_CHECK_EQ_U(lowern("4801442410", a), 5);
+    // The byte form of the same group. Six ops rather than five because the immediate
+    // is emitted first, and is itself a constant.
+    RE_CHECK_EQ_U((uint64_t)lower1("80241820", a), RE_OP_STORE);
+    RE_CHECK_EQ_U(lowern("80241820", a), 6);
+    // A zero immediate is still an immediate. Reading it as absent would substitute a
+    // register for the number the author wrote, which is a plausible wrong answer
+    // rather than an obvious one, so both forms are pinned.
+    RE_CHECK_EQ_U((uint64_t)lower1("4883601800", a), RE_OP_STORE); // and [rax+0x18],0
+    RE_CHECK_EQ_U(lowern("4883601800", a), 6);
+    RE_CHECK_EQ_U((uint64_t)lower1("48c7c000000000", a), RE_OP_CONST); // mov rax,0
+    RE_CHECK_EQ_U((uint64_t)lower1("4883c000", a), RE_OP_INTADD);      // add rax,0
+    // The direction of a two operand form comes from bit 1, not bit 0: 0x00 and 0x01
+    // are both r/m with a register, 0x02 and 0x03 are a register with r/m.
+    RE_CHECK_EQ_U((uint64_t)lower1("4801d8", a), RE_OP_INTADD); // add rax,rbx
+    RE_CHECK_EQ_U((uint64_t)lower1("4803d8", a), RE_OP_INTADD); // add rbx,rax
+    // Each run of eight opcodes is one operation, so the whole block is pinned. This
+    // is where a table written as a switch went wrong once: and, sub and cmp were
+    // attached to the wrong runs, which produced a subtraction for an "and".
+    RE_CHECK_EQ_U((uint64_t)lower1("4821d8", a), RE_OP_INTAND); // and rax,rbx
+    RE_CHECK_EQ_U((uint64_t)lower1("4829d8", a), RE_OP_INTSUB); // sub rax,rbx
+    RE_CHECK_EQ_U((uint64_t)lower1("4831d8", a), RE_OP_INTXOR); // xor rax,rbx
+    RE_CHECK_EQ_U((uint64_t)lower1("4809d8", a), RE_OP_INTOR);  // or  rax,rbx
+    RE_CHECK_EQ_U((uint64_t)lower1("4811d8", a), (uint64_t)-1); // adc: not modelled
+    RE_CHECK_EQ_U((uint64_t)lower1("4819d8", a), (uint64_t)-1); // sbb: not modelled
+    // The accumulator forms have no ModRM byte, so their operand is rax by definition.
+    RE_CHECK_EQ_U((uint64_t)lower1("05"
+                                   "11223344",
+                                   a),
+                  RE_OP_INTADD);
+    RE_CHECK_EQ_U(lowern("05"
+                         "11223344",
+                         a),
+                  2); // the immediate, then the add
+    // Not modelled, and pinned so that adding support is a deliberate change.
+    RE_CHECK_EQ_U((uint64_t)lower1("6690", a), (uint64_t)-1);     // size prefix on a nop
+    RE_CHECK_EQ_U((uint64_t)lower1("f30f1efa", a), (uint64_t)-1); // endbr64
+    RE_CHECK_EQ_U((uint64_t)lower1("55", a), (uint64_t)-1);       // push rbp
+    RE_CHECK_EQ_U((uint64_t)lower1("c3", a), RE_OP_RETURN);
+    RE_CHECK_EQ_U((uint64_t)lower1("e800000000", a), RE_OP_CALL);
+    RE_CHECK_EQ_U((uint64_t)lower1("eb00", a), RE_OP_BRANCH);
+    RE_CHECK_EQ_U((uint64_t)lower1("7400", a), RE_OP_CBRANCH);
+}
+
 int main(void) {
     g_x64 = re_disasm_find("x86-64");
     if (!g_x64) {
@@ -286,5 +407,12 @@ int main(void) {
     test_truncated();
     test_indirect();
     test_prologue();
+    {
+        re_arena_t a;
+        re_arena_init(&a, 0);
+        test_lowering_ops(&a);
+        test_lowering_forms(&a);
+        re_arena_free(&a);
+    }
     return re_test_report("disasm");
 }

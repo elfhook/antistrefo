@@ -24,6 +24,9 @@ extern "C" {
 #define RE_CC_SYSV 2u // SysV: rdi, rsi, rdx, rcx, r8, r9
 
 #define RE_CC_MAX_ARGS 6
+// How many distinct stack displacements a function may touch. A bound, so a
+// pathological function cannot make the record grow without limit.
+#define RE_SLOT_MAX 64
 
 typedef struct {
     uint8_t cc;                       // RE_CC_*
@@ -32,8 +35,10 @@ typedef struct {
     uint32_t n_locals;                // distinct stack slots written below rbp or rsp
     uint32_t n_calls;                 // calls made, which clobber the volatile set
     uint8_t arg_regs[RE_CC_MAX_ARGS]; // the registers seen as arguments
-    bool uses_frame_ptr;              // rbp is set up, so locals are rbp relative
-    bool tail_call;                   // ends in a jump rather than a return
+    int32_t slots[RE_SLOT_MAX];       // the distinct stack offsets touched
+    uint32_t n_slots;
+    bool uses_frame_ptr; // rbp is set up, so locals are rbp relative
+    bool tail_call;      // ends in a jump rather than a return
 } re_stack_t;
 
 // Analyse one function. The walk is linear from the entry, which is enough for a

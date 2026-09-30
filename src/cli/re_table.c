@@ -4,6 +4,8 @@
 // Depends: re_table.h and the command entry points. No I/O beyond stdout.
 #include "cli/re_table.h"
 
+#include "cli/re_cmds3.h"
+
 #include <string.h>
 
 #include "cli/re_cmds.h"
@@ -33,6 +35,8 @@ static const re_cmd_t kCommands[] = {
      re_cmd_jtables, true},
     {"disasm", "disassemble a function or an address range", "disasm <file> [addr] [--len N]",
      re_cmd_disasm, true},
+    {"decompile", "one function as C-like source, with its calls named", "decompile <file> [addr]",
+     re_cmd_decompile, true},
     {"demangle", "demangle one C++ symbol, no file needed", "demangle <symbol>", re_cmd_demangle,
      false},
     {"hexdump", "raw bytes at a file offset", "hexdump <file> --off N --len N", re_cmd_hexdump,

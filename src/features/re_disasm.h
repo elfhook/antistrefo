@@ -61,8 +61,8 @@ typedef struct {
 // The opcode identity, readable without an architecture private header. The map
 // is 0 for a one byte opcode, 1 for 0F, 2 for 0F38 and 3 for 0F3A. Arch neutral
 // code asks what an instruction is through these, never through a private macro.
-#define RE_INSN_MAP(i) ((i)->ops[1])
-#define RE_INSN_OPCODE(i) ((i)->ops[0])
+#define RE_INSN_MAP(i) ((unsigned)(((i)->insn_id >> 8) & 0xFFu))
+#define RE_INSN_OPCODE(i) ((unsigned)((i)->insn_id & 0xFFu))
 
 typedef struct re_disasm {
     void *ctx;

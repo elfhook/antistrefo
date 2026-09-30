@@ -268,8 +268,8 @@ capabilities in one call. Everything else is drill-down.
 | 0 | conventions, utils, scripts, build wiring. Done |
 | 1 | `re_buf` bounded reads, `re_json` writer, format detection, PE parser, command table, CLI, IR seam, fixtures. **in progress** |
 | 2 | strings, entropy, exports, demangling, search, capability rules | Done |
-| 3 | disasm backend, functions, stack and calling convention inference, jump tables, xrefs, FLIRT. Decoder, code map and function recovery done; jump tables, xrefs, FLIRT and calling convention inference to go. |
-| 4 | the C-like emitter over the IR, the function summary |
+| 3 | disasm backend, functions, stack and calling convention inference, jump tables, xrefs, FLIRT. Done: own x86-64 backend behind the vtable, recursive descent function recovery, RIP relative and import named xrefs, jump table detection, FLIRT with file loading, ms64 and sysv inference, and full operand text. |
+| 4 | the C-like emitter over the IR, the function summary. Done: `re_ir` gained the arithmetic and comparison ops, `re_x64_lower` models the integer data flow subset including read modify writes to memory, `re_dc_walk` recovers a function's blocks and labels, `re_decompile` emits the C-like body with named locals and named calls, and `decompile` is a command. |
 | 5 | MCP stdio, auto-generated schemas, session cache, structuredContent |
 | 6 | stretch: delegate decompile to an external engine, ARM-64, emulation |
 

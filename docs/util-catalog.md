@@ -77,7 +77,9 @@ Built in task 2: `re_time`, plus the features `re_search`, `re_rules`, `re_deman
 in `re_demangle.c` and `re_demangle_msvc.c`.
 Built in task 3 so far: `re_ir` storage, `re_code` (the address and coverage map),
 `re_func` (recursive descent), and the x86-64 backend under `src/features/disasm/`.
-Nothing is still missing.
+Built in task 4: `re_dc_walk` (the block structure of one function), `re_dc_print`
+(the emitter's name tables and value renderer), `re_decompile` (the C-like emitter),
+and the data flow half of `re_x64_lower`. Nothing is still missing.
 
 ## Disassembly, and the Capstone question
 
@@ -98,11 +100,23 @@ What this means in practice, stated plainly rather than buried:
 - The decoder covers the integer and SSE subset: prefixes, REX, VEX2, VEX3, EVEX,
   ModRM, SIB, displacements, and the immediate width rules. Unknown opcodes are
   refused, which stops a walk rather than letting it desynchronise.
-- Text rendering is mnemonic only. Operand text, and the data flow half of the IR,
-  arrive with the emitter in task 4.
-- `re_x64_lower` models control flow only. A data flow instruction emits nothing,
-  which the seam defines as not modelled, and is deliberate: a wrong LOAD is worse
-  than no LOAD.
+- Text rendering covers operands: registers, memory with base, index, scale and
+  displacement, RIP relative addresses, and immediates.
+- `re_x64_lower` models the integer data flow subset as well as control flow:
+  moves, the arithmetic and logic group in both its register and immediate forms,
+  the accumulator forms, `test`, `movzx`, `lea`, and loads and stores. A memory
+  destination is a read modify write, so it lowers to a load, the operation and a
+  store rather than to an op that pretends arithmetic can happen in place.
+- Three things are deliberately not modelled, and say so by emitting nothing:
+  the carry forms `adc` and `sbb`, because the flags are not in this IR; the
+  shift and multiply forms, for the same reason until the IR carries flags; and
+  every SSE instruction. An instruction the arch does not lower prints as a
+  comment with its address and its text, so a gap is visible rather than silent.
+- The emitter is pseudo C, not compilable output. Its job is that a reader
+  recognises the function: the signature carries the inferred calling convention
+  and parameter count, locals are named from the frame displacements the stack
+  analysis found, calls are named from the import index, and a compare and the
+  branch that reads its flags print as one expression.
 
 Scope note: the Itanium demangler handles nested names, template arguments,
 substitutions and the common builtin types, and renders unknown template

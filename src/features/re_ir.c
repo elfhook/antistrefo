@@ -33,6 +33,7 @@ void re_ir_func_init(re_ir_func_t *f) {
     f->blocks = NULL;
     f->n_blocks = 0;
     f->cap_blocks = 0;
+    f->next_uniq = 0;
     f->params = NULL;
     f->n_params = 0;
     f->rets = NULL;

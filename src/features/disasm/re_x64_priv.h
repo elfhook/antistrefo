@@ -69,6 +69,11 @@ typedef struct {
 } x64_insn_t;
 
 // The opcode id packs the map so one 16 bit value identifies any encoding.
+// How many temporaries one function may mint. The emitter names them through a
+// fixed table of this size, so the bound is shared: a lowering that went past it
+// would mint a name the emitter cannot hold.
+#define RE_UNIQ_MAX 512
+
 #define X64_MAP_SHIFT 8
 #define X64_ID(map, op) ((uint16_t)(((map) << X64_MAP_SHIFT) | (op)))
 #define X64_ID_MAP(id) ((uint8_t)((id) >> X64_MAP_SHIFT))

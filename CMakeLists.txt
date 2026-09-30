@@ -81,6 +81,8 @@ add_executable(antistrefo
     src/cli/re_cmds.c
     src/cli/re_cmds2.c
     src/cli/re_cmds3.c
+src/cli/re_cmds4.c
+src/cli/re_prep.c
     src/mcp/re_mcp.cpp)
 target_link_libraries(antistrefo PRIVATE re_core re_flags)
 if(MSVC)
