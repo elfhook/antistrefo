@@ -30,6 +30,7 @@ typedef struct {
     re_tui_t tui;
     const char *const *sections; // remembered so head can be a separate call
     size_t n_sections;
+    const re_ctx_t *ctx; // remembered so a report can be reopened mid session
 } re_report_t;
 
 // True when the caller should render a framed report rather than JSON. This is the
@@ -63,6 +64,17 @@ void re_panel_head(re_tui_t *t, re_panel_t *p, const char *s);
 // null arena, and appending to one dereferences the null arena. A renderer needs this
 // function rather than a raw buffer, and that is the point of it.
 const char *re_report_tmp(re_report_t *r, const char *fmt, ...);
+
+// One styled line into the report buffer, for a message between reports.
+void re_report_note(re_report_t *r, re_style_t style, const char *msg);
+
+// Write a prompt and flush, without a newline. This is the shell's only reason to
+// write outside a report, and it goes through here so there is still one place that
+// writes to stdout rather than a second one inside the loop.
+void re_report_prompt(re_report_t *r, const char *text);
+
+// Write a bare newline, to end the line a report left the cursor on.
+void re_report_newline(re_report_t *r);
 
 // A full width panel holding a table, which is the shape every list shaped command
 // wants. Wrapping the tui table rather than repeating it keeps a renderer down to the

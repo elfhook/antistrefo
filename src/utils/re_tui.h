@@ -59,6 +59,11 @@ typedef struct {
 // framed report, a pipe gets the machine format. Nothing else decides.
 bool re_tui_is_tty(void);
 
+// Is stdin a terminal? The interactive shell needs this as well as stdout: a shell
+// with a redirected stdin has nothing to read and would either spin or exit at once,
+// which is the behaviour the shell exists to avoid.
+bool re_tui_stdin_tty(void);
+
 // The terminal width from the environment, or RE_TUI_DEFAULT_WIDTH. The
 // environment rather than an ioctl, so this stays portable and testable.
 uint16_t re_tui_term_width(void);

@@ -12,6 +12,7 @@
 
 #include "utils/re_util.h"
 #include "cli/re_cmds.h"
+#include "cli/re_shell.h"
 #include "cli/re_table.h"
 #include "mcp/re_mcp.h"
 
@@ -60,6 +61,21 @@ int report_error(const re_err_t &err) {
     return re_err_exit_code(err.code);
 }
 
+// Run the interactive shell. Its arena outlives the whole session, unlike the
+// per command arena below, because the remembered file has to survive between lines.
+int run_shell() {
+    re_arena_t arena;
+    re_err_t err{};
+    re_ctx_t ctx{};
+    re_arena_init(&arena, 256u * 1024u);
+    err.code = RE_OK;
+    ctx.arena = &arena;
+    ctx.err = &err;
+    int rc = re_shell_run(&ctx);
+    re_arena_free(&arena);
+    return rc;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -73,6 +89,12 @@ int main(int argc, char **argv) {
 #endif
 
     if (argc < 2) {
+        // No arguments means a person opened the binary, most likely by double
+        // clicking it, so a terminal gets the shell and stays there. Anything else is
+        // something automated asking what this is, and it must get usage and an exit
+        // rather than a prompt nobody is going to answer.
+        if (re_shell_wanted(argc))
+            return run_shell();
         print_usage();
         return re_err_exit_code(RE_E_USAGE);
     }

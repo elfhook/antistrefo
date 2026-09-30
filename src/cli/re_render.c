@@ -6,7 +6,9 @@
 
 #include "features/re_features.h"
 #include "features/re_format.h"
+#include "features/re_func.h"
 #include "features/re_pe.h"
+#include "features/re_stack.h"
 #include "utils/re_fmt.h"
 #include "utils/re_path.h"
 #include "utils/re_tui.h"
@@ -183,6 +185,56 @@ int re_render_imports(re_ctx_t *ctx, const char *path) {
             cells[3] = sym.p ? sym.p : "";
             re_table_row(&tt, cells);
         }
+    }
+    re_table_end(&tt);
+    re_report_end(&r);
+    re_file_close(&f);
+    return 0;
+}
+
+// funcs: the command a shell session spends most of its time in, so it gets the widest
+// table and a column for the call convention, which is the fact that makes a recovered
+// function's signature readable. Sizes are human formatted here and exact in the JSON.
+int re_render_funcs(re_ctx_t *ctx, const char *path) {
+    re_file_t f;
+    re_pe_t pe;
+    re_code_t code;
+    re_fscan_t scan;
+    re_report_t r;
+    re_table_t tt;
+    re_strbuf_t subj;
+    re_strbuf_t sum;
+    static const size_t kWidths[8] = {18, 9, 8, 8, 7, 9, 8, 0};
+    const char *tabs[1] = {"functions"};
+    const char *cols[8] = {"va", "size", "insns", "calls", "edges", "frame", "conv", ""};
+    const char *cells[8];
+    size_t shown = 0;
+    if (!re_prepare(ctx, path, &f, &pe, &code))
+        return re_err_exit_code(ctx->err->code);
+    re_func_scan(&code, ctx->arena, &scan);
+    re_report_open(&r, ctx->arena, ctx, tabs, 1);
+    re_strbuf_init(&subj, ctx->arena);
+    re_strbuf_init(&sum, ctx->arena);
+    re_strbuf_puts(&subj, "funcs ");
+    re_strbuf_puts(&subj, re_path_basename_ptr(path));
+    re_strbuf_appendf(&sum, "%zu functions  %zu edges", RE_VEC_LEN(&scan.funcs),
+                      RE_VEC_LEN(&scan.edges));
+    re_report_head(&r, subj.p, sum.p);
+    re_table_begin(&tt, &r, "Recovered functions", kWidths, 8);
+    re_table_head(&tt, cols);
+    for (size_t i = 0; i < RE_VEC_LEN(&scan.funcs) && shown < ctx->limit; i++, shown++) {
+        const re_func_t *fn = RE_VEC_PTR(&scan.funcs, re_func_t, i);
+        re_stack_t st;
+        re_stack_analyze(&code, fn, ctx->arena, &st);
+        cells[0] = re_report_tmp(&r, "0x%llx", (unsigned long long)fn->va);
+        cells[1] = re_report_tmp(&r, "%u", fn->size);
+        cells[2] = re_report_tmp(&r, "%u", fn->n_insns);
+        cells[3] = re_report_tmp(&r, "%u", fn->n_calls);
+        cells[4] = re_report_tmp(&r, "%zu", re_func_edge_count(&scan, fn));
+        cells[5] = re_report_tmp(&r, "%u", fn->frame_size);
+        cells[6] = re_cc_name(st.cc);
+        cells[7] = "";
+        re_table_row(&tt, cells);
     }
     re_table_end(&tt);
     re_report_end(&r);

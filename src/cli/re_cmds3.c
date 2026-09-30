@@ -4,6 +4,9 @@
 // Depends: re_code, re_func, re_xref, re_disasm. One JSON object on stdout.
 #include "cli/re_cmds3.h"
 
+#include "cli/re_render.h"
+#include "cli/re_report.h"
+
 #include "cli/re_prep.h"
 
 #include "features/re_code.h"
@@ -19,6 +22,9 @@
 #include "utils/re_strbuf.h"
 
 #include "cli/re_cmds3.h"
+
+#include "cli/re_render.h"
+#include "cli/re_report.h"
 // The flags a function carries, as names rather than a bitmask, because a caller
 // reading this should not have to know which bit means prologue.
 static void emit_flags(re_jw_t *w, uint32_t flags) {
@@ -76,6 +82,8 @@ static void emit_func(re_ctx_t *ctx, re_code_t *code, re_jw_t *w, const re_func_
 }
 
 int re_cmd_funcs(re_ctx_t *ctx, const char *path, int argc, char **argv) {
+    if (re_report_wanted(ctx))
+        return re_render_funcs(ctx, path);
     re_file_t f;
     re_pe_t pe;
     re_code_t code;

@@ -22,6 +22,7 @@ int re_render_triage(re_ctx_t *ctx, const char *path);
 int re_render_sections(re_ctx_t *ctx, const char *path);
 int re_render_imports(re_ctx_t *ctx, const char *path);
 int re_render_exports(re_ctx_t *ctx, const char *path);
+int re_render_funcs(re_ctx_t *ctx, const char *path);
 #ifdef __cplusplus
 }
 #endif

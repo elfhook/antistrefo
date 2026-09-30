@@ -40,6 +40,10 @@ bool re_tui_is_tty(void) {
     return RE_ISATTY(RE_FILENO(stdout)) != 0;
 }
 
+bool re_tui_stdin_tty(void) {
+    return RE_ISATTY(RE_FILENO(stdin)) != 0;
+}
+
 uint16_t re_tui_term_width(void) {
     const char *cols = getenv("COLUMNS");
     if (cols && *cols) {
