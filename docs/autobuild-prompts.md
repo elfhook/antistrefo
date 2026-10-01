@@ -1,4 +1,7 @@
-# Auto-analysis build: 4 prompts
+# autobuild-prompts.md - four self contained prompts that build the auto-analysis passes in order.
+# Module: docs (Markdown).
+# Owns: the shared context, the test corpus, and the four prompts.
+# Depends: .rules/rules.md, docs/util-catalog.md, src/features, src/cli.
 
 Send them in order. Each assumes the previous one is committed. Each repeats the
 shared context on purpose, so any one of them works from a cold session.
