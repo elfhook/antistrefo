@@ -306,6 +306,7 @@ int re_cmd_exports(re_ctx_t *ctx, const char *path, int argc, char **argv) {
         re_jw_obj(&w);
         re_jw_kstr(&w, "name", x->name);
         re_jw_ku64(&w, "ordinal", x->ordinal);
+        re_jw_ku64(&w, "rva", x->rva);
         re_jw_obj_end(&w);
     }
     re_jw_arr_end(&w);

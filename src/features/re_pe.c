@@ -212,25 +212,31 @@ static re_err_code_t parse_exports(re_span_t img, re_pe_t *pe, re_arena_t *a) {
     uint64_t off;
     if (!re_pe_rva2off(pe, pe->dd_rva[RE_PE_DD_EXPORT], &off))
         return RE_OK;
-    uint32_t n_names = 0, addr_names = 0, addr_ords = 0, base = 0;
+    uint32_t base = 0, n_names = 0, addr_funcs = 0, addr_names = 0, addr_ords = 0;
     if (!rd32(img, off + 16, &base) || !rd32(img, off + 24, &n_names) ||
-        !rd32(img, off + 28, &addr_names) || !rd32(img, off + 32, &addr_ords))
+        !rd32(img, off + 28, &addr_funcs) || !rd32(img, off + 32, &addr_names) ||
+        !rd32(img, off + 36, &addr_ords))
         return RE_OK;
     if (n_names > 8192)
         n_names = 8192;
-    uint64_t names_off, ords_off;
-    if (!re_pe_rva2off(pe, addr_names, &names_off) || !re_pe_rva2off(pe, addr_ords, &ords_off))
+    uint64_t funcs_off, names_off, ords_off;
+    if (!re_pe_rva2off(pe, addr_names, &names_off) || !re_pe_rva2off(pe, addr_ords, &ords_off) ||
+        !re_pe_rva2off(pe, addr_funcs, &funcs_off))
         return RE_OK;
     for (uint32_t i = 0; i < n_names; i++) {
         uint32_t name_rva = 0;
         uint16_t ord = 0;
-        if (!rd32(img, names_off + i * 4u, &name_rva) || !rd16(img, ords_off + i * 2u, &ord))
+        if (!rd32(img, names_off + (uint64_t)i * 4u, &name_rva) ||
+            !rd16(img, ords_off + (uint64_t)i * 2u, &ord))
             break;
         uint64_t noff;
         re_span_t name;
         re_pe_exp_t e;
         e.ordinal = base + ord;
         e.rva = 0;
+        uint32_t func_rva = 0;
+        if (rd32(img, funcs_off + (uint64_t)ord * 4u, &func_rva))
+            e.rva = func_rva;
         if (re_pe_rva2off(pe, name_rva, &noff) && re_rd_cstr(img, noff, 512, &name)) {
             e.name = re_strn(re_arena_strndup(a, (const char *)name.p, name.n), name.n);
         } else {
