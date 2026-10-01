@@ -101,13 +101,21 @@ static void mark(flow_t *fl, const re_insn_t *in, unsigned map, unsigned op) {
                 fl->written[reg] = true;
             return;
         }
-        if (map == 0 && op == 0x31) { // xor r/m, r
+        // The eight ALU operations in their r/m, reg form, opcodes 0x00 to 0x3D.
+        // This family reads the reg field and writes the r/m field, which is the
+        // opposite way round from mov, so it must be handled before the catch all
+        // below rather than falling into it. Falling in marks the source register
+        // written when the instruction read it, so an argument that is only ever
+        // used in arithmetic looks like it was never passed at all. CMP, 0x38 to
+        // 0x3D, writes no register. 0x0F is the escape to a two byte opcode and is
+        // not one of these, though the map test below already keeps it out.
+        if (map == 0 && in->has_modrm && op != 0x0Fu && op <= 0x3Du) {
             if (in->is_mem)
                 note_slot(fl, in->disp);
-            else
-                note_read(fl, rm);
             if (reg < 16)
-                fl->written[reg] = true;
+                note_read(fl, reg);
+            if (op < 0x38u && rm < 16)
+                fl->written[rm] = true;
             return;
         }
         // Anything else with a ModRM: read the r/m, write the reg. Overstating
@@ -156,6 +164,11 @@ static uint32_t score(const flow_t *fl, const uint8_t *set, size_t n, uint8_t *o
 
 static void count_locals(const flow_t *fl, re_stack_t *out) {
     out->n_locals = fl->n_slots;
+    // n_slots has to be set as well as n_locals. They are equal by construction here,
+    // and a caller reads whichever it was written against - the decompiler loops on
+    // n_slots - so leaving it unset hands out uninitialised memory as a count, and
+    // the locals a function reports then depend on whatever was on the stack.
+    out->n_slots = fl->n_slots;
     for (uint32_t i = 0; i < fl->n_slots && i < RE_SLOT_MAX; i++)
         out->slots[i] = fl->slots[i];
 }

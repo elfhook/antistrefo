@@ -29,13 +29,18 @@ extern "C" {
 #define RE_SLOT_MAX 64
 
 typedef struct {
-    uint8_t cc;                       // RE_CC_*
-    uint32_t n_params;                // arguments inferred, 0 when nothing was seen
-    uint32_t frame_size;              // stack bytes reserved, from the prologue
-    uint32_t n_locals;                // distinct stack slots written below rbp or rsp
-    uint32_t n_calls;                 // calls made, which clobber the volatile set
-    uint8_t arg_regs[RE_CC_MAX_ARGS]; // the registers seen as arguments
-    int32_t slots[RE_SLOT_MAX];       // the distinct stack offsets touched
+    uint8_t cc;          // RE_CC_*
+    uint32_t n_params;   // arguments inferred, 0 when nothing was seen
+    uint32_t frame_size; // stack bytes reserved, from the prologue
+    uint32_t n_locals;   // distinct stack slots written below rbp or rsp
+    uint32_t n_calls;    // calls made, which clobber the volatile set
+    // Which slots of the inferred convention arrived live, as positions in that
+    // convention's order: 0 is the first argument. Positions rather than register
+    // numbers, because the position is what a caller needs to print a1, a2 and so
+    // on, and the two SysV orders do not share register numbers. The register for a
+    // position is in kMsArgs or kSysv above.
+    uint8_t arg_regs[RE_CC_MAX_ARGS];
+    int32_t slots[RE_SLOT_MAX]; // the distinct stack offsets touched
     uint32_t n_slots;
     bool uses_frame_ptr; // rbp is set up, so locals are rbp relative
     bool tail_call;      // ends in a jump rather than a return

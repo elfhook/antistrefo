@@ -45,6 +45,17 @@ if(MSVC)
 endif()
 add_test(NAME cfg COMMAND re_test_cfg)
 
+# The stack suite is separate because the argument inference is the one pass whose
+# failure is invisible: a wrong argument count still compiles to plausible output.
+add_executable(re_test_stack test_stack.c)
+target_link_libraries(re_test_stack PRIVATE re_core re_utils re_flags)
+if(MSVC)
+    set_property(TARGET re_test_stack
+        PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    target_compile_definitions(re_test_stack PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+add_test(NAME stack COMMAND re_test_stack)
+
 # The JSON reader suite is separate because a reader that is lenient about a malformed
 # frame is a protocol bug that shows up as a mysterious client disconnect.
 add_executable(re_test_jr test_jr.c)
