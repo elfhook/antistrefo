@@ -69,6 +69,11 @@ and features as `#include "features/pe/re_pe.h"`.
 Rule: a folder holding more than 15 files is too cluttered and must be divided
 into sub folders by category. Keep every folder at 15 or fewer.
 
+Rule: never generalise from one test file. Every claim about coverage, matching,
+performance or robustness is checked against all five files in the corpus before
+it is believed or reported. A conclusion drawn from a single sample is not a
+conclusion, and reporting one as a finding is a defect in its own right.
+
 ## 3. Banner spec
 
 Every file starts with exactly four comment lines, fixed slot order. C uses `//`,
