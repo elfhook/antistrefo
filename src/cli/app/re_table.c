@@ -43,8 +43,8 @@ static const re_cmd_t kCommands[] = {
      re_cmd_cfg, true},
     {"demangle", "demangle one C++ symbol, no file needed", "demangle <symbol>", re_cmd_demangle,
      false},
-    {"hexdump", "raw bytes at a file offset", "hexdump <file> --off N --len N", re_cmd_hexdump,
-     true},
+    {"hexdump", "raw bytes at a file offset or an rva",
+     "hexdump <file> (--off N | --rva N) --len N", re_cmd_hexdump, true},
     {"mcp", "run the MCP server over stdio", "mcp", NULL, false},
     {"help", "list commands", "help", NULL, false},
     {"version", "print the version and schema", "version", NULL, false},
@@ -106,8 +106,12 @@ static bool apply_flag(re_ctx_t *ctx, re_str_t a, const char *val, re_err_t *err
     }
     bool is_off = re_str_starts_cstr(a, "--off");
     bool is_len = re_str_starts_cstr(a, "--len");
+    // --rva lands in the same field as --off because only the hexdump command
+    // distinguishes them, and it does so by looking at argv. Both are a start
+    // address; which one it is depends on the command, not on the parser.
+    bool is_rva = re_str_starts_cstr(a, "--rva");
     if (!re_str_starts_cstr(a, "--limit") && !re_str_starts_cstr(a, "--offset") && !is_off &&
-        !is_len)
+        !is_len && !is_rva)
         return false;
     uint64_t n = 0;
     if (!parse_u64(val, &n)) {
@@ -157,7 +161,8 @@ bool re_cmd_parse(re_ctx_t *ctx, int argc, char **argv, int *first_positional, r
             val = argv[i] + 9;
         else if (re_str_eq_cstr(a, "--format") || re_str_eq_cstr(a, "--regex") ||
                  re_str_eq_cstr(a, "--limit") || re_str_eq_cstr(a, "--offset") ||
-                 re_str_eq_cstr(a, "--off") || re_str_eq_cstr(a, "--len")) {
+                 re_str_eq_cstr(a, "--off") || re_str_eq_cstr(a, "--rva") ||
+                 re_str_eq_cstr(a, "--len")) {
             if (i + 1 >= argc) {
                 RE_ERR_SETF(err, RE_E_USAGE, "flag %s needs a value", argv[i]);
                 return false;

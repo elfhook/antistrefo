@@ -315,6 +315,24 @@ int re_cmd_exports(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     return 0;
 }
 
+// One string, with its RVA and virtual address as well as its file offset, so it can
+// be handed straight to xrefs or disasm. An offset alone is not an address the rest
+// of the tool accepts, and converting it by hand is where the chain breaks. Strings
+// outside any section, such as the ones in the DOS stub, have no RVA and are reported
+// without one rather than with a fabricated zero.
+static void string_row(re_jw_t *w, const re_str_hit_t *h, const re_pe_t *pe) {
+    re_jw_obj(w);
+    re_jw_khex(w, "off", h->off, 8);
+    uint32_t rva = 0;
+    if (re_pe_off2rva(pe, h->off, &rva)) {
+        re_jw_khex(w, "va", pe->image_base + rva, 16);
+        re_jw_ku64(w, "rva", rva);
+    }
+    re_jw_kbool(w, "wide", h->wide);
+    re_jw_kstr(w, "text", h->text);
+    re_jw_obj_end(w);
+}
+
 int re_cmd_strings(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     (void)argc;
     (void)argv;
@@ -347,14 +365,8 @@ int re_cmd_strings(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     re_jw_key(&w, "strings");
     re_jw_arr(&w);
     if (rx) {
-        for (size_t i = 0; i < RE_VEC_LEN(&hits); i++) {
-            const re_str_hit_t *h = RE_VEC_PTR(&hits, re_str_hit_t, i);
-            re_jw_obj(&w);
-            re_jw_khex(&w, "off", h->off, 8);
-            re_jw_kbool(&w, "wide", h->wide);
-            re_jw_kstr(&w, "text", h->text);
-            re_jw_obj_end(&w);
-        }
+        for (size_t i = 0; i < RE_VEC_LEN(&hits); i++)
+            string_row(&w, RE_VEC_PTR(&hits, re_str_hit_t, i), &l.pe);
     } else {
         size_t seen = 0;
         for (size_t i = 0; i < RE_VEC_LEN(&l.strs.hits); i++) {
@@ -362,12 +374,7 @@ int re_cmd_strings(re_ctx_t *ctx, const char *path, int argc, char **argv) {
                 continue;
             if (ctx->limit && seen - ctx->offset >= ctx->limit)
                 break;
-            const re_str_hit_t *h = RE_VEC_PTR(&l.strs.hits, re_str_hit_t, i);
-            re_jw_obj(&w);
-            re_jw_khex(&w, "off", h->off, 8);
-            re_jw_kbool(&w, "wide", h->wide);
-            re_jw_kstr(&w, "text", h->text);
-            re_jw_obj_end(&w);
+            string_row(&w, RE_VEC_PTR(&l.strs.hits, re_str_hit_t, i), &l.pe);
         }
     }
     re_jw_arr_end(&w);
@@ -376,14 +383,51 @@ int re_cmd_strings(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     return 0;
 }
 
+// --off is a file offset and --rva is a relative virtual address, and they are not
+// interchangeable: an RVA handed to --off silently returns whatever is at that byte
+// in the file, which for a small RVA is the MZ header. Rather than guess, the two are
+// told apart here and an unrecognised one is an error, because a hexdump of the wrong
+// bytes is worse than no hexdump at all. Returns false with the diagnostic set.
+static bool hexdump_start(re_ctx_t *ctx, int argc, char **argv, const re_pe_t *pe) {
+    bool by_rva = false;
+    bool named = false;
+    for (int i = 0; i < argc; i++) {
+        if (re_str_starts_cstr(re_str(argv[i]), "--rva")) {
+            by_rva = true;
+            named = true;
+        } else if (re_str_starts_cstr(re_str(argv[i]), "--off")) {
+            named = true;
+        }
+    }
+    if (!named) {
+        RE_ERR_SET(ctx->err, RE_E_USAGE,
+                   "hexdump needs --off <file offset> or --rva <relative address>, "
+                   "and they are not the same number");
+        return false;
+    }
+    if (!by_rva)
+        return true;
+    uint64_t off = 0;
+    uint32_t rva = (uint32_t)ctx->off;
+    if (!re_pe_rva2off(pe, rva, &off)) {
+        RE_ERR_SETF(ctx->err, RE_E_USAGE, "rva 0x%llx is not in any section",
+                    (unsigned long long)rva);
+        return false;
+    }
+    ctx->off = off;
+    return true;
+}
+
 int re_cmd_hexdump(re_ctx_t *ctx, const char *path, int argc, char **argv) {
-    (void)argc;
-    (void)argv;
     re_loaded_t l;
     re_err_code_t e = load(&l, ctx, path, false, false);
     if (e != RE_OK) {
         unload(&l);
         return re_err_exit_code(e);
+    }
+    if (!hexdump_start(ctx, argc, argv, &l.pe)) {
+        unload(&l);
+        return re_err_exit_code(ctx->err->code);
     }
     re_span_t view = re_span_sub(l.img, ctx->off, ctx->len);
     if (!re_span_valid(view))

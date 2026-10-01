@@ -138,6 +138,12 @@ int run_one(const re_cmd_t *cmd, int argc, char **argv) {
         return report_error(err);
     }
     int code = cmd->fn(&ctx, path, argc - 2 - first, argv + 2 + first);
+    // A command that fails after it has started has already written the diagnostic
+    // into ctx.err, and it has not written anything to stdout. Without this the exit
+    // code says "failed" and nothing says why, which is the one outcome a caller
+    // cannot act on: it cannot tell a usage mistake from a malformed file.
+    if (code != 0 && ctx.err->code != RE_OK)
+        report_error(*ctx.err);
     re_arena_free(&arena);
     return code;
 }
