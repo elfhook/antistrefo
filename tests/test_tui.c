@@ -276,9 +276,72 @@ static void test_header(re_arena_t *a) {
     size_t len = 0;
     while (s[len] && s[len] != '\n')
         len++;
-    RE_CHECK_EQ_U(re_tui_cols_span(s, len), re_tui_cols("a very long subject indeed") + 1 +
-                                                re_tui_cols("and a long summary too"));
+    // The subject alone is longer than the line, so the summary is dropped and
+    // the subject is trimmed, leaving exactly the width. A bar that ran past the
+    // edge would wrap, and every box below it would be out of step.
+    RE_CHECK_EQ_U(re_tui_cols_span(s, len), 40);
 }
+// The width a report is drawn to. This is the answer a resize turns on, so the
+// fallbacks are pinned: COLUMNS when a console is not available, and 80 when neither
+// is. Under a test runner stdout is a pipe, so the console path is the one no case
+// here can reach, and the environment path is the one that is actually exercised.
+static void test_width(void) {
+    _putenv("COLUMNS=");
+    RE_CHECK_EQ_U(re_tui_term_width(), RE_TUI_DEFAULT_WIDTH);
+    _putenv("COLUMNS=120");
+    RE_CHECK_EQ_U(re_tui_term_width(), 120);
+    // Too narrow to lay anything out in, and far wider than anyone needs. Both clamp
+    // to something usable rather than being taken at face value.
+    _putenv("COLUMNS=10");
+    RE_CHECK_EQ_U(re_tui_term_width(), RE_TUI_DEFAULT_WIDTH);
+    _putenv("COLUMNS=10000");
+    RE_CHECK_EQ_U(re_tui_term_width(), 200);
+    _putenv("COLUMNS=nonsense");
+    RE_CHECK_EQ_U(re_tui_term_width(), RE_TUI_DEFAULT_WIDTH);
+    _putenv("COLUMNS=");
+}
+
+// A report must never be wider than the terminal it is drawn in, at any width. This
+// is the property a resize can break and a reader sees immediately as a wrapped box.
+static void test_fits_widths(re_arena_t *a) {
+    static const uint16_t kWidths[] = {40, 55, 72, 100, 160, 200};
+    static const char *const kSubjects[] = {
+        "info",
+        "info cpqsysio64.sys 14.8 KiB (15168B) 6 sec",
+        "a subject that is on its own longer than the narrowest line we lay out here",
+    };
+    static const char *const kSummaries[] = {
+        "schema antistrefo/1",
+        "pe 1 imports  0 exports",
+        "",
+    };
+    for (size_t w = 0; w < sizeof(kWidths) / sizeof(kWidths[0]); w++) {
+        for (size_t si = 0; si < 3; si++) {
+            for (size_t mi = 0; mi < 3; mi++) {
+                rig_t r;
+                re_panel_t p[2];
+                rig_init(&r, a, kWidths[w], false, true);
+                re_tui_header(&r.t, kSubjects[si], kSummaries[mi]);
+                re_panel_init(&p[0], a, "Left", 1);
+                re_panel_init(&p[1], a, "Right", 2);
+                re_panel_kv(&r.t, &p[0], "key", "a value that is fairly long here", RE_ST_NONE);
+                re_panel_kv(&r.t, &p[1], "other", "another value, also long", RE_ST_NONE);
+                re_tui_compose(&r.t, p, 2);
+                const char *s = out_of(&r);
+                while (*s) {
+                    size_t len = 0;
+                    while (s[len] && s[len] != '\n')
+                        len++;
+                    RE_CHECK(re_tui_cols_span(s, len) <= kWidths[w]);
+                    s += len;
+                    if (*s == '\n')
+                        s++;
+                }
+            }
+        }
+    }
+}
+
 int main(void) {
     re_arena_t a;
     re_arena_init(&a, 0);
@@ -287,8 +350,10 @@ int main(void) {
     test_compose_even(&a);
     test_ascii_fallback(&a);
     test_color(&a);
-    test_env();
     test_styled_geometry(&a);
+    test_env();
+    test_width();
+    test_fits_widths(&a);
     test_header(&a);
     re_arena_free(&a);
     return re_test_report("tui");

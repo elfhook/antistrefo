@@ -18,6 +18,7 @@
 #    define RE_FILENO(f) _fileno(f)
 #else
 #    include <unistd.h>
+#    include <sys/ioctl.h>
 #    define RE_ISATTY(fd) isatty(fd)
 #    define RE_FILENO(f) fileno(f)
 #endif
@@ -49,7 +50,38 @@ bool re_tui_stdin_tty(void) {
     return RE_ISATTY(RE_FILENO(stdin)) != 0;
 }
 
+// The width of the window, not of the scrollback buffer. They differ whenever the
+// buffer is wider than the visible area, which is what happens after a resize, and the
+// buffer width would then draw a frame wider than the screen and wrap it.
+#if defined(_WIN32)
+static int console_width(void) {
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (h == INVALID_HANDLE_VALUE || !GetConsoleScreenBufferInfo(h, &csbi))
+        return 0;
+    int w = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+    return w > 0 ? w : 0;
+}
+#else
+static int console_width(void) {
+    struct winsize ws;
+    // STDOUT is asked first and stderr second, because a person piping stdout to a file
+    // still has a terminal, and the width of the terminal is what they are reading in.
+    for (int fd = 1; fd <= 2; fd++) {
+        if (ioctl(fd, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0)
+            return (int)ws.ws_col;
+    }
+    return 0;
+}
+#endif
+
 uint16_t re_tui_term_width(void) {
+    // A real console answers for itself, and it is the only source that follows a
+    // resize. COLUMNS is the fallback for a shell that exports it, which is rare, and
+    // 80 is the last resort for a pipe.
+    int w = console_width();
+    if (w >= (int)RE_TUI_MIN_WIDTH)
+        return w > 200 ? (uint16_t)200 : (uint16_t)w;
     const char *cols = getenv("COLUMNS");
     if (cols && *cols) {
         long v = strtol(cols, NULL, 10);
@@ -145,12 +177,31 @@ void re_tui_header(re_tui_t *t, const char *left, const char *right) {
     re_strbuf_t *scratch = t->scratch;
     size_t lw = re_tui_cols(left);
     size_t rw = re_tui_cols(right);
-    size_t pad = t->width > lw + rw ? t->width - lw - rw : 1;
+    size_t pad = 0;
+    if (lw + rw + 1 <= t->width) {
+        // Both fit with a column of gap between them, so fill the line exactly.
+        pad = t->width - lw - rw;
+    } else {
+        // They do not both fit, and the summary is the half a reader can do without:
+        // the file name in the subject already says which file this is. Dropping it
+        // whole beats trimming it mid word, which is what a naive clip produces.
+        rw = 0;
+        pad = t->width > lw ? t->width - lw : 0;
+    }
     re_strbuf_clear(scratch);
     re_strbuf_puts(scratch, left ? left : "");
     for (size_t i = 0; i < pad; i++)
         re_strbuf_putc(scratch, ' ');
-    re_strbuf_puts(scratch, right ? right : "");
+    if (rw)
+        re_strbuf_puts(scratch, right ? right : "");
+    // Trim as a backstop, for a subject that is on its own longer than the line. A bar
+    // that runs past the edge wraps, which leaves the cursor in the wrong column and
+    // breaks every box drawn after it.
+    size_t n = scratch->len;
+    while (n > 0 && re_tui_cols_span(scratch->p, n) > t->width)
+        n--;
+    scratch->p[n] = '\0';
+    scratch->len = n;
     re_tui_styled(t->out, t, RE_ST_TITLE, scratch->p ? scratch->p : "");
     re_strbuf_putc(t->out, '\n');
 }
