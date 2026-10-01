@@ -14,6 +14,8 @@
 #include "utils/json/re_json.h"
 #include "utils/text/re_strbuf.h"
 #include "cli/cmds/re_prep.h"
+#include "cli/render/re_render2.h"
+#include "cli/render/re_report.h"
 
 // The function the command works on: the one containing the address given, or the
 // function at the entry point when no address was given. A function subject is
@@ -167,6 +169,8 @@ int re_cmd_regions(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     const size_t win = 4096u;
     (void)argc;
     (void)argv;
+    if (re_report_wanted(ctx))
+        return re_render_regions(ctx, path);
     if (!re_prepare(ctx, path, &f, &pe, &code))
         return re_err_exit_code(ctx->err->code);
     re_func_scan(&code, ctx->arena, &scan);
@@ -200,6 +204,8 @@ int re_cmd_cfg(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     re_fscan_t scan;
     re_cfg_t g;
     const re_func_t *fn = NULL;
+    if (re_report_wanted(ctx))
+        return re_render_cfg(ctx, path, re_cmd_positional(argc, argv, 1));
     if (!re_prepare(ctx, path, &f, &pe, &code))
         return re_err_exit_code(ctx->err->code);
     re_func_scan(&code, ctx->arena, &scan);

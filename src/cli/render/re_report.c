@@ -107,7 +107,15 @@ void re_table_end(re_table_t *t) {
 // they interleave correctly with a report already in progress; going straight to stdout
 // would let a message appear before the report it was about.
 void re_report_note(re_report_t *r, re_style_t style, const char *msg) {
-    re_tui_styled(&r->buf, &r->tui, style, msg);
+    // Clipped to the terminal before it is styled. A note is the one line in the report
+    // with no column layout behind it, so an unclipped one simply wraps, and a wrapped
+    // note pushes every box below it out of step because the cursor lands in the wrong
+    // column. re_tui_clip_line is the shared helper, so the clip lands on a character
+    // boundary and keeps any escapes intact rather than counting bytes here.
+    re_strbuf_t clip;
+    re_strbuf_init(&clip, r->scratch.arena);
+    re_tui_clip_line(&clip, &r->tui, msg, re_str(msg).n, r->tui.width);
+    re_tui_styled(&r->buf, &r->tui, style, clip.p ? clip.p : "");
     re_strbuf_putc(&r->buf, '\n');
     // A note is flushed rather than left in the buffer. Nothing else will: the renderers
     // flush when they finish, but a note is what the shell writes when no renderer ran,
