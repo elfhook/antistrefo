@@ -37,6 +37,8 @@ static const re_cmd_t kCommands[] = {
      re_cmd_disasm, true},
     {"decompile", "one function as C-like source, with its calls named", "decompile <file> [addr]",
      re_cmd_decompile, true},
+    {"regions", "classify each window as code, data, rdata or pad, with evidence", "regions <file>",
+     re_cmd_regions, true},
     {"cfg", "control flow graph of one function: blocks, terminators, edges", "cfg <file> [addr]",
      re_cmd_cfg, true},
     {"demangle", "demangle one C++ symbol, no file needed", "demangle <symbol>", re_cmd_demangle,

@@ -12,6 +12,7 @@
 
 #include "features/code/re_code.h"
 #include "features/code/re_func.h"
+#include "features/data/re_regions.h"
 #include "features/dec/re_cfg.h"
 #include "features/dec/re_dc_walk.h"
 #include "features/meta/re_disasm.h"
@@ -162,6 +163,34 @@ static void check_walk(re_code_t *code, const re_func_t *f, re_arena_t *a) {
     RE_CHECK_EQ_U(re_dc_label_of(&w, f->va + 1), 0);
 }
 
+// The region classifier over the same fixture. The one section is executable and
+// holds a decoded function, so it must come back as code; and the window it sits in
+// starts below the first section, so the header region must come back unknown rather
+// than being folded into a neighbour.
+static void check_regions(re_code_t *code, const re_fscan_t *scan, const re_pe_t *pe,
+                          re_arena_t *a) {
+    re_vec_t out;
+    bool truncated = true;
+    re_vec_init(&out, sizeof(re_region_t));
+    size_t n = re_region_scan(code, scan, NULL, pe, 512, &out, &truncated, a);
+    RE_CHECK(n >= 2);
+    RE_CHECK(!truncated);
+    // The image is 0x200 bytes of headers plus 20 bytes of code, so a 512 byte window
+    // covers the headers and the section sits in the next one.
+    size_t found = 0;
+    for (size_t i = 0; i < RE_VEC_LEN(&out); i++) {
+        const re_region_t *r = RE_VEC_PTR(&out, re_region_t, i);
+        if (r->n_funcs == 0)
+            continue;
+        found++;
+        RE_CHECK_EQ_U(r->kind, RE_REG_CODE);
+        RE_CHECK(r->exec);
+        RE_CHECK(r->func_bytes > 0);
+        RE_CHECK(r->confidence >= RE_REG_CONF_LOW);
+    }
+    RE_CHECK(found >= 1);
+}
+
 int main(void) {
     uint8_t img[HDRS + sizeof(kCode)];
     re_arena_t a;
@@ -198,6 +227,7 @@ int main(void) {
     // loop-free diamond must not collapse to one.
     check_graph(&code, &f, &a);
     check_walk(&code, &f, &a);
+    check_regions(&code, &scan, &pe, &a);
     re_arena_free(&a);
     return re_test_report("cfg");
 }

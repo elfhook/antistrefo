@@ -14,6 +14,7 @@ int re_cmd_xrefs(re_ctx_t *ctx, const char *path, int argc, char **argv);
 int re_cmd_jtables(re_ctx_t *ctx, const char *path, int argc, char **argv);
 int re_cmd_disasm(re_ctx_t *ctx, const char *path, int argc, char **argv);
 int re_cmd_decompile(re_ctx_t *ctx, const char *path, int argc, char **argv);
+int re_cmd_regions(re_ctx_t *ctx, const char *path, int argc, char **argv);
 int re_cmd_cfg(re_ctx_t *ctx, const char *path, int argc, char **argv);
 #ifdef __cplusplus
 }

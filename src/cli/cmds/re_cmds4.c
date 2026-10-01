@@ -8,6 +8,7 @@
 #include "features/code/re_func.h"
 #include "features/code/re_stack.h"
 #include "features/code/re_xref.h"
+#include "features/data/re_regions.h"
 #include "features/dec/re_cfg.h"
 #include "features/dec/re_decompile.h"
 #include "utils/json/re_json.h"
@@ -127,8 +128,70 @@ static void cfg_edges(re_jw_t *w, const re_cfg_t *g, size_t from) {
     }
 }
 
-// The control flow graph of one function. The blocks come from the decompiler's own
-// walk, so this graph and the decompiled C always describe the same basic blocks
+// One region and the evidence behind it. The evidence fields are reported even when
+// the verdict is unknown, because "we could not tell, and here is what we saw" is the
+// useful answer on a protected binary and a bare unknown is not.
+static void region_row(re_jw_t *w, const re_region_t *r) {
+    re_jw_obj(w);
+    re_jw_khex(w, "va", r->va, 16);
+    re_jw_ku64(w, "rva", r->rva);
+    re_jw_ku64(w, "size", r->size);
+    re_jw_kcstr(w, "kind", re_reg_kind_name(r->kind));
+    re_jw_kcstr(w, "confidence", re_reg_conf_name(r->confidence));
+    re_jw_kcstr(w, "section", r->sec[0] ? r->sec : "");
+    re_jw_kf64(w, "entropy", r->entropy);
+    re_jw_kbool(w, "exec", r->exec);
+    re_jw_kbool(w, "writable", r->writable);
+    re_jw_ku64(w, "fill_pct", r->fill_pct);
+    re_jw_ku64(w, "funcs", r->n_funcs);
+    re_jw_ku64(w, "func_bytes", r->func_bytes);
+    re_jw_ku64(w, "data_refs", r->n_data_refs);
+    re_jw_ku64(w, "jtables", r->n_jtables);
+    re_jw_obj_end(w);
+}
+
+// Classify the image into windows and say what each one is. Every row carries the
+// counts the verdict came from, so a reader can disagree with the rule and still use
+// the evidence.
+int re_cmd_regions(re_ctx_t *ctx, const char *path, int argc, char **argv) {
+    re_file_t f;
+    re_pe_t pe;
+    re_code_t code;
+    re_fscan_t scan;
+    re_xrefset_t xs;
+    re_vec_t out;
+    bool truncated = false;
+    // A fixed window rather than a flag: the region boundaries have to line up with
+    // the sections to be worth anything, and a caller-supplied size would move them
+    // for no reason. The window is reported in the output so it is never a mystery.
+    const size_t win = 4096u;
+    (void)argc;
+    (void)argv;
+    if (!re_prepare(ctx, path, &f, &pe, &code))
+        return re_err_exit_code(ctx->err->code);
+    re_func_scan(&code, ctx->arena, &scan);
+    re_xref_build(&code, &scan, &pe, ctx->arena, &xs);
+    re_vec_init(&out, sizeof(re_region_t));
+    re_region_scan(&code, &scan, &xs, &pe, win, &out, &truncated, ctx->arena);
+    re_jw_t w;
+    re_jw_init(&w, ctx->arena);
+    re_envelope(&w, "regions", f.whole, &pe);
+    re_jw_ku64(&w, "window", win);
+    re_jw_ku64(&w, "count", RE_VEC_LEN(&out));
+    re_jw_kbool(&w, "truncated", truncated);
+    re_jw_key(&w, "regions");
+    re_jw_arr(&w);
+    for (size_t i = 0; i < RE_VEC_LEN(&out); i++)
+        region_row(&w, RE_VEC_PTR(&out, re_region_t, i));
+    re_jw_arr_end(&w);
+    re_jw_obj_end(&w);
+    re_jw_flush(&w, re_ctx_out(ctx));
+    re_file_close(&f);
+    return 0;
+}
+
+// One function's basic blocks and terminators. The blocks come from the decompiler's
+// own walk, so this graph and the decompiled C always describe the same basic blocks
 // rather than two walkers disagreeing about where a function branches.
 int re_cmd_cfg(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     re_file_t f;
