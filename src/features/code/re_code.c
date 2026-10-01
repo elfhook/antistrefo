@@ -52,7 +52,12 @@ static const re_pe_section_t *find(const re_code_t *c, uint64_t va, uint64_t *ba
         const re_pe_section_t *s = &c->pe->sec[i];
         uint64_t bytes = s->rsize < s->vsize ? s->rsize : s->vsize;
         uint64_t start = c->base + s->vaddr;
-        if ((s->chars & (RE_SEC_EXEC | RE_SEC_CODE)) != (RE_SEC_EXEC | RE_SEC_CODE))
+        // Either flag on its own is taken as evidence of code. Requiring both is
+        // stricter than the format guarantees and it is not safe: a protected image
+        // can have MEM_EXECUTE stripped from its .text and wrongly set on .rodata,
+        // and then a test for both misses the code section entirely and finds nothing
+        // at all. One of the two is what a linker sets; the other can be mangled.
+        if ((s->chars & (RE_SEC_EXEC | RE_SEC_CODE)) == 0)
             continue;
         if (va >= start && va - start < bytes) {
             *base = s->vaddr;
