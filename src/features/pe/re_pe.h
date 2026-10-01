@@ -73,6 +73,7 @@ typedef struct {
     re_vec_t imports; // re_pe_imp_t
     re_vec_t syms;    // re_str_t, flat, indexed by first_sym
     re_vec_t exports; // re_pe_exp_t
+    re_span_t img;    // the bytes this was parsed from, so a later pass can read them
     re_err_t err;
 } re_pe_t;
 
@@ -82,7 +83,31 @@ re_err_code_t re_pe_parse(re_span_t img, re_arena_t *a, re_pe_t *out);
 
 // Translate a relative virtual address to a file offset. Returns false for an
 // address outside every section, which is normal for headers and for relocations.
+// IMAGE_SCN_CNT_CODE and IMAGE_SCN_MEM_EXECUTE, named here so no caller has to
+// remember the numeric values. They live in the format layer because a section table
+// states them, and answering "is this address code or data" is a question about the
+// file, not about any particular analysis pass layered on top of it.
+#define RE_SEC_CODE 0x00000020u
+#define RE_SEC_EXEC 0x20000000u
+
 bool re_pe_rva2off(const re_pe_t *pe, uint32_t rva, uint64_t *out);
+
+// The section an rva falls in, or NULL when it falls in none. NULL is a real answer
+// and not an error: a linker can leave a gap between sections, and an export that
+// points into one is a data marker rather than a function. Reporting such an export
+// as a function is how a tool ends up calling a GPU preference dword code.
+const re_pe_section_t *re_pe_section_at_rva(const re_pe_t *pe, uint32_t rva);
+
+// What an address in a section is: code, data, or neither. The distinction is what
+// decides whether a symbol at that address can be called at all.
+const char *re_pe_region_kind(const re_pe_section_t *s);
+
+// A forwarder is an export whose target lands inside the export directory itself,
+// where the linker has written the string naming the real target in another module.
+// It reads as a data export until you notice the target is the directory itself, and
+// calling it as an address lands in the middle of a string. Returns an empty string
+// for anything that is not a forwarder.
+re_str_t re_pe_export_forwarder(const re_pe_t *pe, uint32_t rva);
 
 // The reverse mapping, for turning a file offset back into a virtual address.
 bool re_pe_off2rva(const re_pe_t *pe, uint64_t off, uint32_t *out);

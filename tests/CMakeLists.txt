@@ -76,3 +76,15 @@ if(MSVC)
     target_compile_definitions(re_test_jr PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 add_test(NAME jr COMMAND re_test_jr)
+
+# The PE suite is separate because "is this address code or data" is the question a
+# wrong answer to makes every later pass quietly wrong, and the fixture it shares with
+# the cfg suite lives in a header so the two cannot disagree about the bytes.
+add_executable(re_test_pe test_pe.c)
+target_link_libraries(re_test_pe PRIVATE re_core re_utils re_flags)
+if(MSVC)
+    set_property(TARGET re_test_pe
+        PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    target_compile_definitions(re_test_pe PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+add_test(NAME pe COMMAND re_test_pe)

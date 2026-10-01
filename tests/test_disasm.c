@@ -395,6 +395,74 @@ static void test_lowering_forms(re_arena_t *a) {
     RE_CHECK_EQ_U((uint64_t)lower1("7400", a), RE_OP_CBRANCH);
 }
 
+// Render one instruction from escaped hex and return the text, or "" on a decode
+// refusal. The comparison that matters is the string: an operand name is the answer,
+// and a correct instruction length says nothing about whether the name was right.
+static const char *render1(const char *hex, re_arena_t *a, uint8_t *size_out) {
+    static char out[64];
+    uint8_t buf[16];
+    size_t n = re_str(hex).n / 2u;
+    for (size_t i = 0; i < n && i < sizeof(buf); i++)
+        buf[i] = (uint8_t)((nib(hex[i * 2]) << 4) | nib(hex[i * 2 + 1]));
+    re_insn_t in;
+    if (!g_x64->decode(g_x64->ctx, 0x140001000ULL, re_span(buf, n), &in)) {
+        out[0] = 0;
+        return out;
+    }
+    if (size_out)
+        *size_out = in.size;
+    re_strbuf_t sb;
+    re_strbuf_init(&sb, a);
+    g_x64->render(g_x64->ctx, &in, a, &sb);
+    size_t k = sb.len < sizeof(out) - 1u ? sb.len : sizeof(out) - 1u;
+    memcpy(out, sb.p, k);
+    out[k] = 0;
+    return out;
+}
+
+// The registers an instruction encodes in its opcode instead of in a ModRM byte.
+// Push and pop default to a 64-bit operand in long mode, and the 0x50 block is two
+// runs of eight - push rax..rdi then pop rax..rdi - so the register is the low three
+// bits, not op minus 0x50. The mov block at 0xB0 encodes its register the same way,
+// and the accumulator forms name al, eax or rax. All three were rendered wrong once,
+// and all three are pinned here against the text rather than the length.
+static void test_implicit_reg(re_arena_t *a) {
+    static const struct {
+        const char *hex;
+        const char *want;
+        uint8_t len;
+    } v[] = {
+        {"50", "push rax", 1},
+        {"57", "push rdi", 1},
+        {"58", "pop rax", 1},
+        {"5f", "pop rdi", 1},
+        {"55", "push rbp", 1},
+        {"4150", "push r8", 2},
+        {"4157", "push r15", 2},
+        {"415f", "pop r15", 2},
+        {"4158", "pop r8", 2},
+        {"b878563412", "mov eax, 0x12345678", 5},
+        {"b001", "mov al, 0x1", 2},
+        {"bfefbeadde", "mov edi, 0xdeadbeef", 5},
+        {"48b8efbeadde00000000", "mov rax, 0xdeadbeef", 10},
+        {"3d78563412", "cmp eax, 0x12345678", 5},
+        {"3c01", "cmp al, 0x1", 2},
+        {"0578563412", "add eax, 0x12345678", 5},
+        {"2501020304", "and eax, 0x4030201", 5},
+        {"353d0c0e0f", "xor eax, 0xf0e0c3d", 5},
+        {"2d01000000", "sub eax, 0x1", 5},
+    };
+    for (size_t i = 0; i < sizeof(v) / sizeof(v[0]); i++) {
+        uint8_t len = 0;
+        RE_CHECK_EQ_STR(render1(v[i].hex, a, &len), v[i].want);
+        RE_CHECK_EQ_U(len, v[i].len);
+    }
+    // The contrast cases. 32-bit is the default for everything else in long mode, so
+    // naming these operands must not have widened the 64-bit push and pop exception.
+    RE_CHECK_EQ_STR(render1("89c0", a, NULL), "mov eax, eax");
+    RE_CHECK_EQ_STR(render1("83f801", a, NULL), "cmp eax, 0x1");
+}
+
 int main(void) {
     g_x64 = re_disasm_find("x86-64");
     if (!g_x64) {
@@ -412,6 +480,7 @@ int main(void) {
         re_arena_init(&a, 0);
         test_lowering_ops(&a);
         test_lowering_forms(&a);
+        test_implicit_reg(&a);
         re_arena_free(&a);
     }
     return re_test_report("disasm");

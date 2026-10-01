@@ -16,11 +16,6 @@ extern "C" {
 #include "utils/mem/re_arena.h"
 #include "utils/mem/re_buf.h"
 
-// IMAGE_SCN_CNT_CODE and IMAGE_SCN_MEM_EXECUTE, named here so no caller has to
-// remember the numeric values.
-#define RE_SEC_CODE 0x00000020u
-#define RE_SEC_EXEC 0x20000000u
-
 typedef struct {
     re_span_t img;          // the whole mapped file
     const re_pe_t *pe;      // for section and address translation

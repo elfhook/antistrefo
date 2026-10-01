@@ -115,6 +115,47 @@ bool re_pe_rva2off(const re_pe_t *pe, uint32_t rva, uint64_t *out) {
     return false;
 }
 
+const re_pe_section_t *re_pe_section_at_rva(const re_pe_t *pe, uint32_t rva) {
+    for (uint16_t i = 0; i < pe->n_sec; i++) {
+        const re_pe_section_t *s = &pe->sec[i];
+        uint32_t span = s->vsize > s->rsize ? s->vsize : s->rsize;
+        if (rva >= s->vaddr && rva - s->vaddr < span)
+            return s;
+    }
+    return NULL;
+}
+
+const char *re_pe_region_kind(const re_pe_section_t *s) {
+    if (!s)
+        return "unmapped";
+    // Either flag counts. A protected image can have MEM_EXECUTE stripped from its
+    // .text, and a section carrying only CNT_CODE is still where the code is.
+    if (s->chars & (RE_SEC_EXEC | RE_SEC_CODE))
+        return "code";
+    return "data";
+}
+
+re_str_t re_pe_export_forwarder(const re_pe_t *pe, uint32_t rva) {
+    re_str_t none = {NULL, 0};
+    uint32_t ed = pe->dd_rva[RE_PE_DD_EXPORT], es = pe->dd_size[RE_PE_DD_EXPORT];
+    if (!es || rva < ed || rva - ed >= es)
+        return none;
+    uint64_t off = 0;
+    if (!re_pe_rva2off(pe, rva, &off) || off >= pe->img.n)
+        return none;
+    const char *p = (const char *)pe->img.p + off;
+    size_t room = pe->img.n - off, i = 0;
+    while (i < room && p[i] >= 0x20 && p[i] < 0x7f)
+        i++;
+    // A forwarder string is NUL terminated. Running to the end of the image without
+    // finding one means this is not a forwarder, and guessing here would invent an
+    // implementation module that the file never named.
+    if (i == 0 || i == room)
+        return none;
+    re_str_t s = {p, i};
+    return s;
+}
+
 bool re_pe_off2rva(const re_pe_t *pe, uint64_t off, uint32_t *out) {
     for (uint16_t i = 0; i < pe->n_sec; i++) {
         const re_pe_section_t *s = &pe->sec[i];
@@ -250,6 +291,7 @@ static re_err_code_t parse_exports(re_span_t img, re_pe_t *pe, re_arena_t *a) {
 
 re_err_code_t re_pe_parse(re_span_t img, re_arena_t *a, re_pe_t *out) {
     memset(out, 0, sizeof(*out));
+    out->img = img;
     re_vec_init(&out->imports, sizeof(re_pe_imp_t));
     re_vec_init(&out->syms, sizeof(re_str_t));
     re_vec_init(&out->exports, sizeof(re_pe_exp_t));

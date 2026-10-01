@@ -1,0 +1,108 @@
+// test_pe.c - what a PE says about an address, and what an export actually is.
+// Module: test (C11).
+// Owns: the export directory's contents and the code/data decision behind it.
+// Depends: re_pe through its public header, so the parser is exercised as a caller.
+#include "re_test.h"
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+
+#include "features/pe/re_pe.h"
+#include "utils/mem/re_arena.h"
+
+#include "re_pe_fixture.h"
+
+int re_test_count = 0;
+int re_test_fail = 0;
+
+// The export table, asserted on its content rather than its size. Every earlier test
+// in this project compared counts, which is why a parser that returned the opening
+// bytes of a function as each export's name passed: the number of names parsed is the
+// same either way, so only the text can catch it.
+static void check_exports(const re_pe_t *pe) {
+    static const char *const kWant[4] = {"AlphaFunc", "BetaFunc", "GammaFunc", "FwdFunc"};
+    RE_CHECK_FITS(pe->exports, 4);
+    for (size_t i = 0; i < RE_VEC_LEN(&pe->exports) && i < 4; i++) {
+        const re_pe_exp_t *x = RE_VEC_PTR(&pe->exports, re_pe_exp_t, i);
+        RE_CHECK(re_str_eq_cstr(x->name, kWant[i]));
+        // Base is 1 in the fixture, so ordinal i is i+1.
+        RE_CHECK_EQ_U(x->ordinal, i + 1u);
+        static const uint32_t kRva[4] = {TEXT_RVA, TEXT_RVA + 6, TEXT_RVA + 19, EDATA_RVA + 0x94};
+        RE_CHECK_EQ_HEX(x->rva, kRva[i]);
+    }
+}
+
+// An export is not automatically a function. Real binaries contain exports that are
+// not: a forwarder points at a string naming another module, and a driver's
+// preference dword is a value a loader reads rather than an address to call. Both sit
+// beside genuine code in the same table, so "has an export" cannot be what decides
+// whether an address can be called. The three cases are pinned separately because
+// conflating any two of them produces an answer that looks right.
+static void check_export_kinds(const re_pe_t *pe) {
+    const re_pe_section_t *text = re_pe_section_at_rva(pe, TEXT_RVA);
+    const re_pe_section_t *edat = re_pe_section_at_rva(pe, EDATA_RVA);
+    // A hit, a hit on data, and a miss. The space past the last section is in no
+    // section at all, and NULL there is the answer rather than a failure.
+    RE_CHECK(text != NULL);
+    RE_CHECK(edat != NULL);
+    RE_CHECK(re_pe_section_at_rva(pe, EDATA_RVA + EDATA_SIZE + 0x100) == NULL);
+    RE_CHECK_EQ_STR(re_pe_region_kind(text), "code");
+    RE_CHECK_EQ_STR(re_pe_region_kind(edat), "data");
+    RE_CHECK_EQ_STR(re_pe_region_kind(NULL), "unmapped");
+    RE_CHECK_EQ_STR(text->name, ".text");
+    RE_CHECK_EQ_STR(edat->name, ".edata");
+    // Only the last export is a forwarder, and only it names another module.
+    RE_CHECK_FITS(pe->exports, 4);
+    for (size_t i = 0; i < RE_VEC_LEN(&pe->exports) && i < 4; i++) {
+        const re_pe_exp_t *x = RE_VEC_PTR(&pe->exports, re_pe_exp_t, i);
+        re_str_t f = re_pe_export_forwarder(pe, x->rva);
+        if (i == 3)
+            RE_CHECK(re_str_eq_cstr(f, "KERNEL32.Sleep"));
+        else
+            RE_CHECK_EQ_U(f.n, 0);
+    }
+}
+
+// A section carrying MEM_EXECUTE but not CNT_CODE is still code, and one carrying
+// CNT_CODE but not MEM_EXECUTE is still code. Requiring both flags made a whole
+// protected image invisible: a real 98 MB .text had its execute bit stripped and given
+// to .rodata instead, and every function in it was missed because of it. Both variants
+// start from .text's real characteristics and then lose one flag; starting the second
+// from .edata's would clear nothing and pass by accident.
+static void check_one_flag_is_enough(void) {
+    uint8_t img[IMG_BYTES];
+    static const uint32_t kTextChars = 0x60000020u;
+    for (size_t variant = 0; variant < 2; variant++) {
+        re_arena_t a;
+        re_pe_t pe;
+        re_arena_init(&a, 65536);
+        build_pe(img);
+        uint32_t base =
+            kTextChars & (variant == 0 ? ~(uint32_t)RE_SEC_CODE : ~(uint32_t)RE_SEC_EXEC);
+        put32(img + 0x148 + 36, base);
+        re_pe_parse(re_span(img, sizeof(img)), &a, &pe);
+        RE_CHECK(pe.valid);
+        const re_pe_section_t *s = re_pe_section_at_rva(&pe, TEXT_RVA);
+        RE_CHECK(s != NULL);
+        RE_CHECK_EQ_STR(re_pe_region_kind(s), "code");
+        re_arena_free(&a);
+    }
+}
+
+int main(void) {
+    uint8_t img[IMG_BYTES];
+    re_arena_t a;
+    re_pe_t pe;
+    re_arena_init(&a, 65536);
+    build_pe(img);
+    re_pe_parse(re_span(img, sizeof(img)), &a, &pe);
+    RE_CHECK(pe.valid);
+    RE_CHECK_EQ_U(pe.n_sec_field, 2);
+    check_exports(&pe);
+    check_export_kinds(&pe);
+    check_one_flag_is_enough();
+    re_arena_free(&a);
+    return re_test_report("pe");
+}

@@ -83,6 +83,28 @@ Built in task 4: `re_dc_walk` (the block structure of one function), `re_dc_prin
 (the emitter's name tables and value renderer), `re_decompile` (the C-like emitter),
 and the data flow half of `re_x64_lower`. Nothing is still missing.
 
+## Code, data, and what an export actually is
+
+`re_pe` answers three questions that a report cannot answer honestly without, because
+conflating any two of them produces an answer that looks right:
+
+- `re_pe_section_at_rva` returns the section an rva falls in, or NULL. NULL is a real
+  answer rather than a failure: a linker can leave a gap between sections, and an
+  export pointing into one is not code.
+- `re_pe_region_kind` reports `code`, `data` or `unmapped`. Either `IMAGE_SCN_CNT_CODE`
+  or `IMAGE_SCN_MEM_EXECUTE` counts as code, never both required. Requiring both made a
+  whole protected image invisible: a real 98 MB `.text` had its execute bit stripped
+  and given to `.rodata` instead. Both constants live in `re_pe.h` now, because a
+  section table states them and this is a question about the file.
+- `re_pe_export_forwarder` reports the module and function an export forwards to, or an
+  empty string. A forwarder's target rva lands inside the export directory itself, where
+  the linker wrote that string.
+
+An export therefore has a `kind` of `code`, `forwarder` or `data`, and a forwarder also
+carries `forwarder`. Real binaries need all three: `AmdPowerXpressRequestHighPerformance`
+and `NvOptimusEnablement` are dwords a GPU driver reads, `VerLanguageNameA` in
+`version.dll` is `KERNEL32.VerLanguageNameA`, and neither is an address to call.
+
 ## Disassembly, and the Capstone question
 
 Rules 8.1 planned a Capstone backend behind the `re_disasm` vtable. The backend in

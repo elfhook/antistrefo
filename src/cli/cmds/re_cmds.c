@@ -307,6 +307,20 @@ int re_cmd_exports(re_ctx_t *ctx, const char *path, int argc, char **argv) {
         re_jw_kstr(&w, "name", x->name);
         re_jw_ku64(&w, "ordinal", x->ordinal);
         re_jw_ku64(&w, "rva", x->rva);
+        // Whether an export is callable. Two exports in a real binary are not
+        // functions at all: AmdPowerXpressRequestHighPerformance and
+        // NvOptimusEnablement are dwords a GPU driver reads out of the image, and
+        // listing them beside real code with nothing to say so invites treating them
+        // as addresses to call.
+        const re_pe_section_t *sec = re_pe_section_at_rva(&l.pe, x->rva);
+        re_str_t fwd = re_pe_export_forwarder(&l.pe, x->rva);
+        const char *kind = fwd.n ? "forwarder" : re_pe_region_kind(sec);
+        re_jw_kcstr(&w, "kind", kind);
+        re_jw_kcstr(&w, "section", sec ? sec->name : "");
+        // When set, the real code is in another module and this is its address
+        // there. Without it a forwarder is indistinguishable from a function.
+        if (fwd.n)
+            re_jw_kstr(&w, "forwarder", fwd);
         re_jw_obj_end(&w);
     }
     re_jw_arr_end(&w);

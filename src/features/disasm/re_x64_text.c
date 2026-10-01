@@ -83,8 +83,11 @@ static bool form_has_imm(const re_insn_t *in) {
         return true;
     if (map == 0 && op <= 0x3D)
         return (op & 7u) == 4u || (op & 7u) == 5u;
+    // 0xB8 through 0xBF are the 32-bit half of the same mov block as 0xB0..0xB7 and
+    // carry an immediate just the same. Leaving them out rendered every mov reg,
+    // imm32 in the file as a bare "mov" with no operands.
     if (map == 0 &&
-        (op == 0x68 || op == 0x6A || (op >= 0xB0 && op <= 0xB7) || op == 0xC6 || op == 0xC7))
+        (op == 0x68 || op == 0x6A || (op >= 0xB0 && op <= 0xBF) || op == 0xC6 || op == 0xC7))
         return true;
     return (op == 0x81 || op == 0xA9 || op == 0xBA || op == 0xC1 || op == 0xF6 || op == 0xF7);
 }
@@ -135,11 +138,25 @@ static void put_rm(re_strbuf_t *out, const re_insn_t *in) {
     put_mem(out, in);
 }
 
-static void put_imm(re_strbuf_t *out, int64_t v) {
+// The immediate's width decides how it reads. A 32-bit immediate is a bit pattern,
+// and the decoder has already sign extended it to fill an int64, so printing that
+// directly turns "mov edi, 0xdeadbeef" into "mov edi, -0x21524111" - a different
+// number from the one the instruction carries. Only a genuine 64-bit immediate keeps
+// its sign, because there the sign is part of the value.
+static void put_imm_sz(re_strbuf_t *out, int64_t v, uint8_t opsize) {
+    if (opsize && opsize < 8) {
+        uint64_t mask = (1ull << (opsize * 8u)) - 1ull;
+        re_strbuf_appendf(out, "0x%llx", (unsigned long long)((uint64_t)v & mask));
+        return;
+    }
     if (v < 0)
         re_strbuf_appendf(out, "-0x%llx", (unsigned long long)(-v));
     else
         re_strbuf_appendf(out, "0x%llx", (unsigned long long)v);
+}
+
+static void put_imm(re_strbuf_t *out, const re_insn_t *in) {
+    put_imm_sz(out, in->imm, in->opsize);
 }
 
 // True when the ModRM reg field selects an operation rather than naming an
@@ -154,6 +171,34 @@ static bool is_group(const re_insn_t *in) {
         return false;
     return (op >= 0x80 && op <= 0x83) || (op >= 0xC0 && op <= 0xC1) || (op >= 0xD0 && op <= 0xD3) ||
            op == 0xF6 || op == 0xF7 || op == 0xFE || op == 0xFF || op == 0xC6 || op == 0xC7;
+}
+
+// The register an instruction encodes in its opcode rather than in a ModRM byte.
+// The accumulator forms carry it as al or ax, and the mov block 0xB0..0xBF carries it
+// as the low three bits of the opcode. Returns false when there is none, in which
+// case the operand is left off rather than guessed.
+static bool implicit_reg(const re_insn_t *in, unsigned *reg, uint8_t *force_size) {
+    unsigned op = X64_ID_OP(in->insn_id);
+    unsigned map = X64_ID_MAP(in->insn_id);
+    *force_size = 0;
+    if (map != 0)
+        return false;
+    // 04 05 0C 0D ... 3C 3D: add, or, adc, sbb, and, sub, xor and cmp against al, ax,
+    // eax or rax. The even opcode is the byte form, the odd one the wider form.
+    if (op <= 0x3D && ((op & 7u) == 4u || (op & 7u) == 5u)) {
+        *reg = 0;
+        *force_size = (op & 1u) ? 0 : 1; // 0 leaves the decoded size alone
+        return true;
+    }
+    // B0..B7 is mov r8, imm8 and B8..BF is mov r32, imm32. Both runs put the register
+    // in the low three bits, so the register is not op minus 0xB0 any more than push's
+    // register is op minus 0x50.
+    if (op >= 0xB0u && op <= 0xBFu) {
+        *reg = (op & 0x07u) + ((in->rex & 1u) ? 8u : 0u);
+        *force_size = (op <= 0xB7u) ? 1 : 0;
+        return true;
+    }
+    return false;
 }
 
 // The operand forms, in the order x86 defines them. Most integer instructions are
@@ -172,13 +217,28 @@ static void put_operands(re_strbuf_t *out, const re_insn_t *in, const char *m) {
     }
     if (!in->has_modrm) {
         if (map == 0 && op >= 0x50 && op <= 0x5F) {
-            unsigned r = (op - 0x50u) + ((in->rex & 1u) ? 8u : 0u);
+            // The low three bits pick the register, not op minus 0x50. The block is
+            // two runs of eight - push rax..rdi then pop rax..rdi - so subtracting
+            // 0x50 renders pop rdi as r15.
+            unsigned r = (op & 0x07u) + ((in->rex & 1u) ? 8u : 0u);
             re_strbuf_puts(out, " ");
             put_reg(out, in, r);
             return;
         }
+        unsigned r = 0;
+        uint8_t forced = 0;
+        if (implicit_reg(in, &r, &forced)) {
+            re_insn_t v = *in; // a byte form needs its own size to name the register
+            if (forced)
+                v.opsize = forced;
+            re_strbuf_puts(out, " ");
+            put_reg(out, &v, r);
+            re_strbuf_puts(out, ", ");
+            put_imm(out, in);
+            return;
+        }
         if (form_has_imm(in))
-            put_imm(out, in->imm);
+            put_imm(out, in);
         return;
     }
     if (map == 0 && op == 0x8D) { // lea
@@ -193,7 +253,7 @@ static void put_operands(re_strbuf_t *out, const re_insn_t *in, const char *m) {
         put_rm(out, in);
         if (form_has_imm(in)) {
             re_strbuf_puts(out, ", ");
-            put_imm(out, in->imm);
+            put_imm(out, in);
         }
         return;
     }
@@ -212,7 +272,7 @@ static void put_operands(re_strbuf_t *out, const re_insn_t *in, const char *m) {
     }
     if (in->imm) {
         re_strbuf_puts(out, ", ");
-        put_imm(out, in->imm);
+        put_imm(out, in);
     }
     (void)m;
 }

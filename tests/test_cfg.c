@@ -22,153 +22,10 @@
 #include "utils/mem/re_arena.h"
 #include "utils/mem/re_vec.h"
 
+#include "re_pe_fixture.h"
+
 int re_test_count = 0;
 int re_test_fail = 0;
-
-#define IMAGE_BASE 0x180000000ull
-#define TEXT_RVA 0x1000u
-#define EDATA_RVA 0x2000u
-#define EDATA_SIZE 0x80u
-#define HDRS 0x200u
-#define OPT_SIZE 0xF0u
-#define IMG_BYTES (HDRS + sizeof(kCode) + EDATA_SIZE)
-
-// A four block function chosen so every edge kind is unambiguous:
-//
-//   1000  cmp rax, 1
-//   1004  je  0x100D            taken -> block 2, fall -> block 1
-//   1006  mov eax, 1
-//   100B  jmp 0x1013            taken -> block 3
-//   100D  mov eax, 2
-//   1012  ret
-//   1013  ret
-//
-// Under the bug this suite exists for, only the first block was decoded and the
-// graph came back as one block, so "more than one block" is the load bearing check.
-static const uint8_t kCode[] = {
-    0x48, 0x83, 0xf8, 0x01,       // 1000 cmp rax,1
-    0x74, 0x07,                   // 1004 je +7 -> 100D
-    0xb8, 0x01, 0x00, 0x00, 0x00, // 1006 mov eax,1
-    0xeb, 0x06,                   // 100B jmp +6 -> 1013
-    0xb8, 0x02, 0x00, 0x00, 0x00, // 100D mov eax,2
-    0xc3,                         // 1012 ret
-    0xc3,                         // 1013 ret
-};
-
-static void put16(uint8_t *p, uint16_t v) {
-    p[0] = (uint8_t)v;
-    p[1] = (uint8_t)(v >> 8);
-}
-
-static void put32(uint8_t *p, uint32_t v) {
-    p[0] = (uint8_t)v;
-    p[1] = (uint8_t)(v >> 8);
-    p[2] = (uint8_t)(v >> 16);
-    p[3] = (uint8_t)(v >> 24);
-}
-
-static void put64(uint8_t *p, uint64_t v) {
-    put32(p, (uint32_t)v);
-    put32(p + 4, (uint32_t)(v >> 32));
-}
-
-static void build_exports(uint8_t *ed);
-
-// The smallest PE the parser accepts: a DOS stub, a COFF header, a PE32+ optional
-// header with sixteen empty data directories, and one executable section. Every
-// field the parser reads is written here, and nothing else, so a parser change that
-// starts requiring a new field shows up as a failing test rather than as a silently
-// different fixture.
-static void build_pe(uint8_t *img) {
-    memset(img, 0, HDRS);
-    put16(img, 0x5A4D);             // MZ
-    put32(img + 0x3C, 0x40);        // e_lfanew
-    put32(img + 0x40, 0x00004550u); // PE\0\0
-    uint8_t *coff = img + 0x44;
-    put16(coff + 0, 0x8664);    // machine x64
-    put16(coff + 2, 1);         // one section
-    put16(coff + 16, OPT_SIZE); // SizeOfOptionalHeader
-    put16(coff + 18, 0x0022);   // executable, large address aware
-    uint8_t *opt = coff + 20;
-    put16(opt, 0x20B);             // PE32+
-    put32(opt + 16, TEXT_RVA);     // AddressOfEntryPoint
-    put64(opt + 24, IMAGE_BASE);   // ImageBase
-    put32(opt + 56, TEXT_RVA * 2); // SizeOfImage
-    put16(opt + 68, 1);            // subsystem native
-    put32(opt + 108, 16);          // NumberOfRvaAndSizes
-    put32(opt + 112, EDATA_RVA);   // export directory
-    put32(opt + 116, EDATA_SIZE);
-    uint8_t *sec = img + 0x148; // lfanew + 4 + 20 + SizeOfOptionalHeader
-    memcpy(sec, ".text", 5);
-    put32(sec + 8, (uint32_t)sizeof(kCode));  // VirtualSize
-    put32(sec + 12, TEXT_RVA);                // VirtualAddress
-    put32(sec + 16, (uint32_t)sizeof(kCode)); // SizeOfRawData
-    put32(sec + 20, HDRS);                    // PointerToRawData
-    put32(sec + 36, 0x60000020u);             // code, execute, read
-    memcpy(img + HDRS, kCode, sizeof(kCode));
-    uint8_t *ed = img + 0x148 + 40; // the second section header
-    memcpy(ed, ".edata", 6);
-    put32(ed + 8, EDATA_SIZE);            // VirtualSize
-    put32(ed + 12, EDATA_RVA);            // VirtualAddress
-    put32(ed + 16, EDATA_SIZE);           // SizeOfRawData
-    put32(ed + 20, HDRS + sizeof(kCode)); // PointerToRawData
-    put32(ed + 36, 0x40000040u);          // initialised data, read
-    put16(coff + 2, 2);                   // two sections, now that there are two
-    build_exports(img + HDRS + sizeof(kCode));
-}
-
-// The export directory, laid out exactly as the spec has it, because the whole point
-// is that the parser reads the fields at the offsets they actually occupy:
-//
-//   +16 Base  +20 NumberOfFunctions  +24 NumberOfNames
-//   +28 AddressOfFunctions  +32 AddressOfNames  +36 AddressOfNameOrdinals
-//
-// Getting +28 and +32 the wrong way round is the bug that made every export name
-// come back as the opening bytes of a function, and a count-only test cannot see it:
-// the number of names parsed correctly either way. So the names here are fixed text,
-// and the assertions below compare them.
-static void build_exports(uint8_t *ed) {
-    const char *names[3] = {"AlphaFunc", "BetaFunc", "GammaFunc"};
-    const uint32_t rvas[3] = {TEXT_RVA, TEXT_RVA + 6, TEXT_RVA + 19};
-    size_t n = sizeof(names) / sizeof(names[0]);
-    put32(ed + 0, 0);                 // Characteristics
-    put32(ed + 12, EDATA_RVA + 0x4E); // Name, the module
-    put32(ed + 16, 1);                // Base: ordinals are 1, 2, 3
-    put32(ed + 20, (uint32_t)n);      // NumberOfFunctions
-    put32(ed + 24, (uint32_t)n);      // NumberOfNames
-    put32(ed + 28, EDATA_RVA + 0x28); // AddressOfFunctions
-    put32(ed + 32, EDATA_RVA + 0x34); // AddressOfNames
-    put32(ed + 36, EDATA_RVA + 0x40); // AddressOfNameOrdinals
-    size_t str = 0x4E;
-    memcpy(ed + str, "testmod.dll", 11);
-    str += 12;
-    for (size_t i = 0; i < n; i++) {
-        put32(ed + 0x28 + i * 4, rvas[i]);
-        put32(ed + 0x34 + i * 4, EDATA_RVA + (uint32_t)str);
-        put16(ed + 0x40 + i * 2, (uint16_t)i);
-        size_t len = 0;
-        while (names[i][len])
-            len++;
-        memcpy(ed + str, names[i], len + 1);
-        str += len + 1;
-    }
-}
-
-// The export table, asserted on its content rather than its size. Every earlier test
-// in this project compared counts, which is why a parser that returned the opening
-// bytes of a function as each export's name passed: the number of names parsed is the
-// same either way, so only the text can catch it.
-static void check_exports(const re_pe_t *pe) {
-    static const char *const kWant[3] = {"AlphaFunc", "BetaFunc", "GammaFunc"};
-    RE_CHECK_FITS(pe->exports, 3);
-    for (size_t i = 0; i < RE_VEC_LEN(&pe->exports) && i < 3; i++) {
-        const re_pe_exp_t *x = RE_VEC_PTR(&pe->exports, re_pe_exp_t, i);
-        RE_CHECK(re_str_eq_cstr(x->name, kWant[i]));
-        // Base is 1 in the fixture, so ordinal i is i+1.
-        RE_CHECK_EQ_U(x->ordinal, i + 1u);
-        RE_CHECK_EQ_HEX(x->rva, i == 0 ? TEXT_RVA : (i == 1 ? TEXT_RVA + 6 : TEXT_RVA + 19));
-    }
-}
 
 // The terminator of block i, or RE_CFG_TERM_UNKNOWN when there is no such block.
 static uint8_t term_of(const re_cfg_t *g, size_t i) {
@@ -328,7 +185,7 @@ static void check_analysis(void) {
     RE_CHECK(xs && xs->count > 0);
     // Exports came from the fixture's export directory, so a driver that lost them
     // between the PE parse and the report would show here.
-    RE_CHECK_FITS(an.pe.exports, 3);
+    RE_CHECK_FITS(an.pe.exports, 4);
     RE_CHECK(re_str_eq_cstr(re_analysis_pass(&an, RE_PASS_FUNCS)->pass == RE_PASS_FUNCS
                                 ? RE_VEC_AT(&an.pe.exports, re_pe_exp_t, 0).name
                                 : re_str(""),
@@ -398,6 +255,11 @@ static int emit_fixture(int argc, char **argv) {
     return 0;
 }
 
+// A section carrying MEM_EXECUTE but not CNT_CODE is still code, and one carrying
+// CNT_CODE but not MEM_EXECUTE is still code. Requiring both flags made a whole
+// protected image invisible: a real 98 MB .text had its execute bit stripped and given
+// to .rodata instead, and every function in it was missed because of it. The fixture
+// here starts with both bits, and each is removed in turn.
 int main(int argc, char **argv) {
     uint8_t img[IMG_BYTES];
     re_arena_t a;
@@ -437,7 +299,6 @@ int main(int argc, char **argv) {
     check_graph(&code, &f, &a);
     check_walk(&code, &f, &a);
     check_regions(&code, &scan, &pe, &a);
-    check_exports(&pe);
     check_pass_records();
     check_analysis();
     check_malformed();

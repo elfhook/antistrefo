@@ -47,6 +47,23 @@ extern int re_test_fail;
         }                                                                                   \
     } while (0)
 
+// A count cannot tell you the answer was the right one. Anything whose whole point is
+// a particular string - a demangled name, a disassembled operand, an export kind -
+// has to be compared as text, or a tool that returned the wrong name with the right
+// number of lines passes.
+#define RE_CHECK_EQ_STR(got, want)                                                     \
+    do {                                                                               \
+        re_test_count++;                                                               \
+        const char *g_ = (got);                                                        \
+        const char *w_ = (want);                                                       \
+        if (!g_ || strcmp(g_, w_) != 0) {                                              \
+            re_test_fail++;                                                            \
+            printf("FAIL %s:%d  %s = \"%s\", want \"%s\"\n", __FILE__, __LINE__, #got, \
+                   g_ ? g_ : "(null)", w_);                                            \
+            fflush(stdout);                                                            \
+        }                                                                              \
+    } while (0)
+
 // Index only when the vector is long enough, so a wrong count reports a
 // failure instead of crashing and hiding everything after it.
 #define RE_CHECK_FITS(vec, want) RE_CHECK_EQ_U(RE_VEC_LEN(&(vec)), (uint64_t)(want))

@@ -362,6 +362,13 @@ bool x64_decode(const uint8_t *p, size_t n, uint64_t addr, x64_insn_t *out) {
             return false;
         in.has_modrm = true;
     }
+    // Push and pop are the documented exception to the 32-bit default: in 64-bit
+    // mode their default operand size is 64, and the 32-bit form needs a mode switch
+    // rather than a prefix. Without this, 50 rendered as "push eax" where it is
+    // "push rax" and 5f as "pop r15d" where it is "pop rdi". The lengths were already
+    // right, which is why only the operand names were wrong.
+    if (in.map == 0 && in.opcode >= 0x50u && in.opcode <= 0x5Fu)
+        in.opsize = 8;
     if (!x64_finish(p, n, i, addr, &in))
         return false;
     *out = in;
