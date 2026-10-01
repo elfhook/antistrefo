@@ -210,6 +210,21 @@ static void emit_side(re_jw_t *w, const re_xrefset_t *xs, const re_fscan_t *scan
 // The subject is one address, given as an RVA or a virtual address. xrefs to it
 // are the question worth asking, and the callers are the useful part of the
 // answer, so both directions come back.
+// The window a subject's references are searched over, and the fields describing it.
+// A subject inside a function is searched over that whole function, which is what a
+// reader asking about a function means. A subject outside every function - a string, a
+// constant, a vtable slot, which is the normal case for the things people actually
+// want xrefs for - is searched at its own address. It used to be searched at a window
+// of zero, which skipped the query and reported no references at all, so every string
+// in every binary looked like nothing pointed at it.
+static uint64_t subject_span(const re_fscan_t *scan, uint64_t subject, bool *is_func) {
+    long fi = re_func_index_of(scan, subject);
+    *is_func = fi >= 0;
+    if (fi < 0)
+        return 1;
+    return re_func_at(scan, (size_t)fi)->size;
+}
+
 int re_cmd_xrefs(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     re_file_t f;
     re_pe_t pe;
@@ -218,7 +233,6 @@ int re_cmd_xrefs(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     re_xrefset_t xs;
     re_vec_t into;
     re_vec_t outof;
-    re_str_t want = re_str("");
     uint64_t subject = 0;
     uint64_t span = 0;
     // argv[0] is the file, which main already passed as path, so an address is
@@ -227,11 +241,9 @@ int re_cmd_xrefs(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     bool have = pos != NULL;
     if (!re_prepare(ctx, path, &f, &pe, &code))
         return re_err_exit_code(ctx->err->code);
-    if (have)
-        want = re_str(pos);
     re_func_scan(&code, ctx->arena, &scan);
     re_xref_build(&code, &scan, &pe, ctx->arena, &xs);
-    if (have && !re_parse_addr(ctx, want, &pe, &subject)) {
+    if (have && !re_parse_addr(ctx, re_str(pos), &pe, &subject)) {
         re_file_close(&f);
         return re_err_exit_code(RE_E_USAGE);
     }
@@ -251,16 +263,19 @@ int re_cmd_xrefs(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     long fi = re_func_index_of(&scan, subject);
     re_jw_khex(&w, "subject", subject, 16);
     re_jw_ku64(&w, "subject_rva", subject - code.base);
-    if (fi >= 0) {
-        span = re_func_at(&scan, (size_t)fi)->size;
-        re_jw_ku64(&w, "subject_func", (uint64_t)fi);
+    {
+        bool in_func = false;
+        span = subject_span(&scan, subject, &in_func);
+        if (in_func)
+            re_jw_ku64(&w, "subject_func", (uint64_t)fi);
+        else
+            re_jw_kbool(&w, "subject_data", true);
     }
+    re_jw_ku64(&w, "subject_span", span);
     re_vec_init(&into, sizeof(uint32_t));
     re_vec_init(&outof, sizeof(uint32_t));
-    if (span) {
-        re_xref_into(&xs, ctx->arena, subject, span, 0, &into);
-        re_xref_out_of(&xs, ctx->arena, subject, span, 0, &outof);
-    }
+    re_xref_into(&xs, ctx->arena, subject, span, 0, &into);
+    re_xref_out_of(&xs, ctx->arena, subject, span, 0, &outof);
     emit_side(&w, &xs, &scan, "called_from", false, subject, span, &into);
     emit_side(&w, &xs, &scan, "refers_to", true, subject, span, &outof);
     re_jw_ku64(&w, "total", RE_VEC_LEN(&into) + RE_VEC_LEN(&outof));

@@ -33,6 +33,16 @@ if(MSVC)
 endif()
 add_test(NAME tui COMMAND re_test_tui)
 
+# The command layer lives in the executable, so testing it means running it. This is
+# the only automated coverage a command gets, and without it a command that silently
+# answers "nothing references this" passes every other suite.
+add_test(NAME xrefs_data
+    COMMAND ${CMAKE_COMMAND}
+        -DANTISTREFO=$<TARGET_FILE:antistrefo>
+        -DEMITTER=$<TARGET_FILE:re_test_cfg>
+        -DWORK=${CMAKE_CURRENT_BINARY_DIR}/re_xrefs_fixture.sys
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/run_xrefs_data.cmake)
+
 # The control flow suite is separate because a graph that collapses to one block is
 # the kind of regression that every other suite happily passes, so it gets its own
 # binary and a hand assembled fixture whose every edge is known in advance.

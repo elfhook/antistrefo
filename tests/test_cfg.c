@@ -380,12 +380,32 @@ static void check_regions(re_code_t *code, const re_fscan_t *scan, const re_pe_t
     RE_CHECK(found >= 1);
 }
 
-int main(void) {
+// With --emit <path>, write the fixture to disk and stop. The command layer lives in
+// the executable rather than in a library, so the only way to test a command is to run
+// it against a real file, and this is how that file appears. Without the flag this is
+// the normal suite.
+static int emit_fixture(int argc, char **argv) {
+    uint8_t img[IMG_BYTES];
+    FILE *fh;
+    if (argc < 3)
+        return 2;
+    build_pe(img);
+    fh = fopen(argv[2], "wb");
+    if (!fh)
+        return 3;
+    fwrite(img, 1, sizeof(img), fh);
+    fclose(fh);
+    return 0;
+}
+
+int main(int argc, char **argv) {
     uint8_t img[IMG_BYTES];
     re_arena_t a;
     re_pe_t pe;
     re_code_t code;
     re_fscan_t scan;
+    if (argc > 1)
+        return emit_fixture(argc, argv);
     re_arena_init(&a, 65536);
     build_pe(img);
 
