@@ -8,6 +8,7 @@
 #include "features/code/re_func.h"
 #include "features/code/re_stack.h"
 #include "features/code/re_xref.h"
+#include "features/dec/re_cfg.h"
 #include "features/dec/re_decompile.h"
 #include "utils/json/re_json.h"
 #include "utils/text/re_strbuf.h"
@@ -87,6 +88,94 @@ int re_cmd_decompile(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     re_vec_init(&strs, sizeof(uint32_t));
     re_jw_ku64(&w, "strings", re_xref_func_strings(&xs, fn, ctx->arena, &strs));
     re_vec_truncate(&strs, 0);
+    re_jw_obj_end(&w);
+    re_jw_flush(&w, re_ctx_out(ctx));
+    re_file_close(&f);
+    return 0;
+}
+
+// One block of the graph. The terminator is named rather than numbered, and the
+// unresolved case is carried through as a null destination instead of being
+// dropped, because a branch whose target was not decoded is a real finding.
+static void cfg_block(re_jw_t *w, const re_cfg_block_t *b, const re_func_t *fn, size_t index) {
+    re_jw_obj(w);
+    re_jw_ku64(w, "index", index);
+    re_jw_khex(w, "va", b->va, 16);
+    re_jw_ku64(w, "rva", b->va - fn->va + fn->rva);
+    re_jw_ku64(w, "size", b->size);
+    re_jw_ku64(w, "insns", b->n_insns);
+    re_jw_kcstr(w, "term", re_cfg_term_name(b->term));
+    if (b->has_target) {
+        re_jw_khex(w, "target", b->target, 16);
+        re_jw_kbool(w, "target_external", b->external);
+    }
+    re_jw_obj_end(w);
+}
+
+// The edges of one block, as successor indices. A tail call names no destination
+// because there is none inside the function, which is the whole point of it.
+static void cfg_edges(re_jw_t *w, const re_cfg_t *g, size_t from) {
+    for (size_t i = 0; i < RE_VEC_LEN(&g->edges); i++) {
+        const re_cfg_edge_t *e = RE_VEC_PTR(&g->edges, re_cfg_edge_t, i);
+        if (e->from != from)
+            continue;
+        re_jw_obj(w);
+        re_jw_kcstr(w, "kind", re_cfg_edge_name(e->kind));
+        if (e->to >= 0)
+            re_jw_ku64(w, "to", (uint64_t)e->to);
+        re_jw_obj_end(w);
+    }
+}
+
+// The control flow graph of one function. The blocks come from the decompiler's own
+// walk, so this graph and the decompiled C always describe the same basic blocks
+// rather than two walkers disagreeing about where a function branches.
+int re_cmd_cfg(re_ctx_t *ctx, const char *path, int argc, char **argv) {
+    re_file_t f;
+    re_pe_t pe;
+    re_code_t code;
+    re_fscan_t scan;
+    re_cfg_t g;
+    const re_func_t *fn = NULL;
+    if (!re_prepare(ctx, path, &f, &pe, &code))
+        return re_err_exit_code(ctx->err->code);
+    re_func_scan(&code, ctx->arena, &scan);
+    if (!pick_func(ctx, &scan, &pe, re_cmd_positional(argc, argv, 1), &fn)) {
+        re_file_close(&f);
+        return re_err_exit_code(ctx->err->code);
+    }
+    bool ok = re_cfg_build(&code, fn, &g, ctx->arena);
+    re_jw_t w;
+    re_jw_init(&w, ctx->arena);
+    re_envelope(&w, "cfg", f.whole, &pe);
+    re_jw_khex(&w, "va", fn->va, 16);
+    re_jw_ku64(&w, "rva", fn->rva);
+    re_jw_ku64(&w, "size", fn->size);
+    if (fn->name.n)
+        re_jw_kstr(&w, "name", fn->name);
+    re_jw_kbool(&w, "ok", ok);
+    re_jw_ku64(&w, "blocks", RE_VEC_LEN(&g.blocks));
+    re_jw_ku64(&w, "edges", RE_VEC_LEN(&g.edges));
+    re_jw_ku64(&w, "unknown_terminators", g.n_unknown);
+    re_jw_ku64(&w, "unresolved_edges", g.n_unresolved);
+    re_jw_kbool(&w, "truncated", g.truncated);
+    re_jw_key(&w, "block_list");
+    re_jw_arr(&w);
+    for (size_t i = 0; i < RE_VEC_LEN(&g.blocks); i++)
+        cfg_block(&w, RE_VEC_PTR(&g.blocks, re_cfg_block_t, i), fn, i);
+    re_jw_arr_end(&w);
+    re_jw_key(&w, "succ");
+    re_jw_arr(&w);
+    for (size_t i = 0; i < RE_VEC_LEN(&g.blocks); i++) {
+        re_jw_obj(&w);
+        re_jw_ku64(&w, "from", i);
+        re_jw_key(&w, "to");
+        re_jw_arr(&w);
+        cfg_edges(&w, &g, i);
+        re_jw_arr_end(&w);
+        re_jw_obj_end(&w);
+    }
+    re_jw_arr_end(&w);
     re_jw_obj_end(&w);
     re_jw_flush(&w, re_ctx_out(ctx));
     re_file_close(&f);

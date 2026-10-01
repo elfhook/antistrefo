@@ -45,13 +45,27 @@ static void walk_block(re_code_t *code, uint64_t start, uint64_t fva, uint64_t f
         for (uint32_t i = 0; i < in.size; i++)
             seen[va - fva + i] = 1;
         RE_VEC_PUSH(&w->insns, a, in);
-        if (in.is_conditional && in.has_target && in_func(in.target, fva, fend)) {
+        // Any branch that ends this block makes its target a block start. A
+        // conditional one is obvious, but an unconditional jump is equally a new
+        // block, and leaving its target unlabelled is what makes a thunk read as one
+        // undifferentiated run of instructions instead of a jump to somewhere else.
+        if (in.is_branch && in.has_target && in_func(in.target, fva, fend)) {
             re_dc_label_t l;
             l.va = in.target;
             l.label = 0;
             RE_VEC_PUSH(&w->labels, a, l);
         }
         va += in.size;
+        // The instruction after a conditional branch is a block start in its own
+        // right: it is where control goes when the branch is not taken. Without it
+        // the fall-through path has no block of its own and lands on whatever block
+        // happens to follow, which is the branch target rather than the fall path.
+        if (in.is_conditional && in_func(va, fva, fend)) {
+            re_dc_label_t fl;
+            fl.va = va;
+            fl.label = 0;
+            RE_VEC_PUSH(&w->labels, a, fl);
+        }
         if (block_end(&in))
             return;
     }
@@ -141,6 +155,18 @@ void re_dc_walk(re_code_t *code, const re_func_t *f, re_dc_walk_t *w, re_arena_t
     l.label = 0;
     RE_VEC_PUSH(&w->labels, a, l);
     walk_block(code, f->va, f->va, fend, seen, w, a);
+    // Walk every block start the first block revealed, and then every block start
+    // those revealed. walk_block stops at a terminator, so the entry block alone is
+    // the whole function unless its targets are followed too. The list grows while
+    // it is being read, which is the whole traversal: a block reached from two
+    // predecessors is already marked in seen, so it is decoded once, and a loop
+    // back to an earlier block adds nothing and so the walk terminates.
+    for (size_t i = 0; i < RE_VEC_LEN(&w->labels); i++) {
+        uint64_t sva = RE_VEC_AT(&w->labels, re_dc_label_t, i).va;
+        if (sva < f->va || sva >= fend || seen[sva - f->va])
+            continue;
+        walk_block(code, sva, f->va, fend, seen, w, a);
+    }
     dedupe_labels(w);
     if (RE_VEC_LEN(&w->insns) > 1) {
         re_insn_t *v = RE_VEC_PTR(&w->insns, re_insn_t, 0);
