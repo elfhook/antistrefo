@@ -383,6 +383,32 @@ int re_cmd_strings(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     return 0;
 }
 
+// Why an rva has no bytes on disk. The two cases look identical from the outside and
+// mean opposite things: an rva outside every section is a mistake, while an rva inside
+// a section that declares no raw data is a packed image, where the code is written at
+// run time rather than stored. Reporting the first for the second would tell a reader
+// their address was wrong when the file is the thing that is unusual.
+static void rva_diagnostic(re_err_t *err, const re_pe_t *pe, uint32_t rva) {
+    for (uint16_t i = 0; i < pe->n_sec; i++) {
+        const re_pe_section_t *s = &pe->sec[i];
+        if (rva < s->vaddr || rva - s->vaddr >= s->vsize)
+            continue;
+        if (s->rsize == 0) {
+            RE_ERR_SETF(err, RE_E_UNSUPPORTED,
+                        "rva 0x%llx is in section '%s', which declares no raw data on "
+                        "disk; this image is packed and its code exists only in memory",
+                        (unsigned long long)rva, s->name);
+        } else {
+            RE_ERR_SETF(err, RE_E_USAGE,
+                        "rva 0x%llx is in the virtual tail of section '%s', past the "
+                        "bytes stored in the file",
+                        (unsigned long long)rva, s->name);
+        }
+        return;
+    }
+    RE_ERR_SETF(err, RE_E_USAGE, "rva 0x%llx is not in any section", (unsigned long long)rva);
+}
+
 // --off is a file offset and --rva is a relative virtual address, and they are not
 // interchangeable: an RVA handed to --off silently returns whatever is at that byte
 // in the file, which for a small RVA is the MZ header. Rather than guess, the two are
@@ -410,8 +436,7 @@ static bool hexdump_start(re_ctx_t *ctx, int argc, char **argv, const re_pe_t *p
     uint64_t off = 0;
     uint32_t rva = (uint32_t)ctx->off;
     if (!re_pe_rva2off(pe, rva, &off)) {
-        RE_ERR_SETF(ctx->err, RE_E_USAGE, "rva 0x%llx is not in any section",
-                    (unsigned long long)rva);
+        rva_diagnostic(ctx->err, pe, rva);
         return false;
     }
     ctx->off = off;
