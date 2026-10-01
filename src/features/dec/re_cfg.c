@@ -122,8 +122,10 @@ static void link_edges(re_cfg_t *o, const uint64_t *starts, size_t nb, const re_
                      outside ? RE_CFG_EDGE_TAIL : RE_CFG_EDGE_TAKEN);
             continue;
         }
-        if (i + 1 < nb)
-            add_edge(o, a, (uint32_t)i, (int32_t)(i + 1), RE_CFG_EDGE_FALL);
+        // Nothing else falls through. A ret leaves the function, a call returns to
+        // the instruction after it, and a block the walk cut short or ended on an
+        // indirect branch has no successor we can claim. The next block being
+        // adjacent is not evidence that control reaches it, so no edge is invented.
     }
 }
 

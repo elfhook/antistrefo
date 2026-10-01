@@ -33,6 +33,18 @@ if(MSVC)
 endif()
 add_test(NAME tui COMMAND re_test_tui)
 
+# The control flow suite is separate because a graph that collapses to one block is
+# the kind of regression that every other suite happily passes, so it gets its own
+# binary and a hand assembled fixture whose every edge is known in advance.
+add_executable(re_test_cfg test_cfg.c)
+target_link_libraries(re_test_cfg PRIVATE re_core re_utils re_flags)
+if(MSVC)
+    set_property(TARGET re_test_cfg
+        PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    target_compile_definitions(re_test_cfg PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+add_test(NAME cfg COMMAND re_test_cfg)
+
 # The JSON reader suite is separate because a reader that is lenient about a malformed
 # frame is a protocol bug that shows up as a mysterious client disconnect.
 add_executable(re_test_jr test_jr.c)
