@@ -11,6 +11,7 @@ import sys
 
 SKIP_DIRS = {".git", ".vs", "build", "out", "__pycache__", ".cache", "Tools"}
 MAX_LINES = 500
+MAX_FOLDER_FILES = 15
 MAX_FUNC_LINES = 60
 MAX_NESTING = 4
 BANNER_LINES = 4
@@ -278,6 +279,24 @@ def check_util_catalog(root, rep):
             rep.add("docs/util-catalog.md", 0, "rule0", f"{h} is not in the util catalog")
 
 
+def check_folder_size(root, rep):
+    """rule2: a folder over MAX_FOLDER_FILES must be divided into sub folders.
+
+    Only src/ is checked. A limit that applied to the whole tree would fail on the
+    build and .git directories, which say nothing about how the source is arranged.
+    """
+    src = os.path.join(root, "src")
+    if not os.path.isdir(src):
+        return
+    for dirpath, dirnames, filenames in os.walk(src):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        if len(filenames) > MAX_FOLDER_FILES:
+            rel = os.path.relpath(dirpath, root).replace(os.sep, "/")
+            rep.add(rel, 0, "rule2",
+                    f"{len(filenames)} files, cap is {MAX_FOLDER_FILES}; divide it into "
+                    "sub folders by category")
+
+
 def main():
     ap = argparse.ArgumentParser(description="enforce the project rules")
     ap.add_argument("root", nargs="?", default=".")
@@ -305,6 +324,7 @@ def main():
         if len(lines) > MAX_LINES:
             rep.add(rel, len(lines), "rule1", f"{len(lines)} lines, cap is {MAX_LINES}")
     check_util_catalog(root, rep)
+    check_folder_size(root, rep)
     if not args.quiet:
         for p, ln, rule, msg, _fixable in sorted(rep.items):
             where = f"{p}:{ln}" if ln else p

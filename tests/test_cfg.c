@@ -25,8 +25,11 @@ int re_test_fail = 0;
 
 #define IMAGE_BASE 0x180000000ull
 #define TEXT_RVA 0x1000u
+#define EDATA_RVA 0x2000u
+#define EDATA_SIZE 0x80u
 #define HDRS 0x200u
 #define OPT_SIZE 0xF0u
+#define IMG_BYTES (HDRS + sizeof(kCode) + EDATA_SIZE)
 
 // A four block function chosen so every edge kind is unambiguous:
 //
@@ -67,6 +70,8 @@ static void put64(uint8_t *p, uint64_t v) {
     put32(p + 4, (uint32_t)(v >> 32));
 }
 
+static void build_exports(uint8_t *ed);
+
 // The smallest PE the parser accepts: a DOS stub, a COFF header, a PE32+ optional
 // header with sixteen empty data directories, and one executable section. Every
 // field the parser reads is written here, and nothing else, so a parser change that
@@ -89,7 +94,9 @@ static void build_pe(uint8_t *img) {
     put32(opt + 56, TEXT_RVA * 2); // SizeOfImage
     put16(opt + 68, 1);            // subsystem native
     put32(opt + 108, 16);          // NumberOfRvaAndSizes
-    uint8_t *sec = img + 0x148;    // lfanew + 4 + 20 + SizeOfOptionalHeader
+    put32(opt + 112, EDATA_RVA);   // export directory
+    put32(opt + 116, EDATA_SIZE);
+    uint8_t *sec = img + 0x148; // lfanew + 4 + 20 + SizeOfOptionalHeader
     memcpy(sec, ".text", 5);
     put32(sec + 8, (uint32_t)sizeof(kCode));  // VirtualSize
     put32(sec + 12, TEXT_RVA);                // VirtualAddress
@@ -97,6 +104,68 @@ static void build_pe(uint8_t *img) {
     put32(sec + 20, HDRS);                    // PointerToRawData
     put32(sec + 36, 0x60000020u);             // code, execute, read
     memcpy(img + HDRS, kCode, sizeof(kCode));
+    uint8_t *ed = img + 0x148 + 40; // the second section header
+    memcpy(ed, ".edata", 6);
+    put32(ed + 8, EDATA_SIZE);            // VirtualSize
+    put32(ed + 12, EDATA_RVA);            // VirtualAddress
+    put32(ed + 16, EDATA_SIZE);           // SizeOfRawData
+    put32(ed + 20, HDRS + sizeof(kCode)); // PointerToRawData
+    put32(ed + 36, 0x40000040u);          // initialised data, read
+    put16(coff + 2, 2);                   // two sections, now that there are two
+    build_exports(img + HDRS + sizeof(kCode));
+}
+
+// The export directory, laid out exactly as the spec has it, because the whole point
+// is that the parser reads the fields at the offsets they actually occupy:
+//
+//   +16 Base  +20 NumberOfFunctions  +24 NumberOfNames
+//   +28 AddressOfFunctions  +32 AddressOfNames  +36 AddressOfNameOrdinals
+//
+// Getting +28 and +32 the wrong way round is the bug that made every export name
+// come back as the opening bytes of a function, and a count-only test cannot see it:
+// the number of names parsed correctly either way. So the names here are fixed text,
+// and the assertions below compare them.
+static void build_exports(uint8_t *ed) {
+    const char *names[3] = {"AlphaFunc", "BetaFunc", "GammaFunc"};
+    const uint32_t rvas[3] = {TEXT_RVA, TEXT_RVA + 6, TEXT_RVA + 19};
+    size_t n = sizeof(names) / sizeof(names[0]);
+    put32(ed + 0, 0);                 // Characteristics
+    put32(ed + 12, EDATA_RVA + 0x4E); // Name, the module
+    put32(ed + 16, 1);                // Base: ordinals are 1, 2, 3
+    put32(ed + 20, (uint32_t)n);      // NumberOfFunctions
+    put32(ed + 24, (uint32_t)n);      // NumberOfNames
+    put32(ed + 28, EDATA_RVA + 0x28); // AddressOfFunctions
+    put32(ed + 32, EDATA_RVA + 0x34); // AddressOfNames
+    put32(ed + 36, EDATA_RVA + 0x40); // AddressOfNameOrdinals
+    size_t str = 0x4E;
+    memcpy(ed + str, "testmod.dll", 11);
+    str += 12;
+    for (size_t i = 0; i < n; i++) {
+        put32(ed + 0x28 + i * 4, rvas[i]);
+        put32(ed + 0x34 + i * 4, EDATA_RVA + (uint32_t)str);
+        put16(ed + 0x40 + i * 2, (uint16_t)i);
+        size_t len = 0;
+        while (names[i][len])
+            len++;
+        memcpy(ed + str, names[i], len + 1);
+        str += len + 1;
+    }
+}
+
+// The export table, asserted on its content rather than its size. Every earlier test
+// in this project compared counts, which is why a parser that returned the opening
+// bytes of a function as each export's name passed: the number of names parsed is the
+// same either way, so only the text can catch it.
+static void check_exports(const re_pe_t *pe) {
+    static const char *const kWant[3] = {"AlphaFunc", "BetaFunc", "GammaFunc"};
+    RE_CHECK_FITS(pe->exports, 3);
+    for (size_t i = 0; i < RE_VEC_LEN(&pe->exports) && i < 3; i++) {
+        const re_pe_exp_t *x = RE_VEC_PTR(&pe->exports, re_pe_exp_t, i);
+        RE_CHECK(re_str_eq_cstr(x->name, kWant[i]));
+        // Base is 1 in the fixture, so ordinal i is i+1.
+        RE_CHECK_EQ_U(x->ordinal, i + 1u);
+        RE_CHECK_EQ_HEX(x->rva, i == 0 ? TEXT_RVA : (i == 1 ? TEXT_RVA + 6 : TEXT_RVA + 19));
+    }
 }
 
 // The terminator of block i, or RE_CFG_TERM_UNKNOWN when there is no such block.
@@ -174,8 +243,8 @@ static void drive_malformed(const uint8_t *bytes, size_t n);
 static void check_malformed(void) {
     static const size_t kCuts[] = {1, 0x20, 0x41, 0x58, 0x100, 0x148, 0x170, 0x1f0};
     static const size_t kPokes[] = {0x3c, 0x44, 0x46, 0x58, 0x5a, 0x68, 0x148, 0x15c};
-    uint8_t img[HDRS + sizeof(kCode)];
-    uint8_t bad[HDRS + sizeof(kCode)];
+    uint8_t img[IMG_BYTES];
+    uint8_t bad[IMG_BYTES];
     size_t done = 0;
     for (size_t ci = 0; ci < sizeof(kCuts) / sizeof(kCuts[0]); ci++) {
         build_pe(img);
@@ -247,7 +316,7 @@ static void check_regions(re_code_t *code, const re_fscan_t *scan, const re_pe_t
 }
 
 int main(void) {
-    uint8_t img[HDRS + sizeof(kCode)];
+    uint8_t img[IMG_BYTES];
     re_arena_t a;
     re_pe_t pe;
     re_code_t code;
@@ -259,7 +328,7 @@ int main(void) {
     re_pe_parse(span, &a, &pe);
     RE_CHECK(pe.valid);
     RE_CHECK_EQ_HEX(pe.image_base, IMAGE_BASE);
-    RE_CHECK_EQ_U(pe.n_sec_field, 1);
+    RE_CHECK_EQ_U(pe.n_sec_field, 2);
     RE_CHECK(pe.pe32plus);
 
     RE_CHECK(re_code_init(&code, span, &pe, re_disasm_find("x86-64"), &a));
@@ -283,6 +352,7 @@ int main(void) {
     check_graph(&code, &f, &a);
     check_walk(&code, &f, &a);
     check_regions(&code, &scan, &pe, &a);
+    check_exports(&pe);
     check_malformed();
     re_arena_free(&a);
     return re_test_report("cfg");

@@ -67,12 +67,21 @@ Include path root is `src/`, so utils are reached as `#include "utils/mem/re_are
 and features as `#include "features/pe/re_pe.h"`.
 
 Rule: a folder holding more than 15 files is too cluttered and must be divided
-into sub folders by category. Keep every folder at 15 or fewer.
+into sub folders by category. Keep every folder at 15 or fewer. Enforced by
+check.py over src/, so a folder that creeps past the cap fails the gate rather
+than than being noticed months later.
 
 Rule: never generalise from one test file. Every claim about coverage, matching,
 performance or robustness is checked against all five files in the corpus before
 it is believed or reported. A conclusion drawn from a single sample is not a
 conclusion, and reporting one as a finding is a defect in its own right.
+
+Rule: a test asserts content, not only counts. A parser that returns the right
+number of wrong answers passes every count-based check, which is how an export
+table that named each export after the opening bytes of a function survived two
+validation passes and the whole gate. Where the correct value is knowable, pin
+it. Where a bug can be reintroduced to prove the test catches it, do that before
+believing the test.
 
 ## 3. Banner spec
 
