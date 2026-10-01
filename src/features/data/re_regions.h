@@ -47,6 +47,7 @@ typedef struct {
     double entropy;     // Shannon entropy of the bytes present on disk
     uint32_t n_funcs;   // functions whose extent intersects the region
     uint32_t func_bytes;
+    uint32_t n_strings;   // strings starting in the region
     uint32_t n_data_refs; // references from code into the region
     uint32_t n_jtables;   // jump tables whose entries start in the region
     uint32_t fill_pct;    // percentage of filler bytes, 0-100
@@ -56,12 +57,17 @@ typedef struct {
     char sec[9]; // containing section name, empty when there is none
 } re_region_t;
 
-// Classify [va, va+size) once per call. jt is a re_jtable_t vector as returned by
-// re_jtable_scan, or NULL when no scan was done; it is indexed rather than rescanned,
-// because jump table detection is the expensive part and there is no reason to pay
-// for it once per window. Returns false when size is zero.
+// Evidence that costs a whole-image pass to gather, done once by re_region_scan and
+// then only searched. Both lists are virtual addresses in ascending order; either may
+// be NULL when the caller had no scan to give.
+typedef struct {
+    const re_vec_t *jtables; // uint64_t, ascending
+    const re_vec_t *strings; // uint64_t, ascending
+} re_region_ev_t;
+
+// Classify [va, va+size) once per call. Returns false when size is zero.
 bool re_region_classify(re_code_t *c, const re_fscan_t *scan, const re_xrefset_t *xs,
-                        const re_pe_t *pe, const re_vec_t *jt, uint64_t va, uint64_t size,
+                        const re_pe_t *pe, const re_region_ev_t *ev, uint64_t va, uint64_t size,
                         re_region_t *out, re_arena_t *a);
 
 // Walk the image in windows of `win` bytes and classify each. Regions that fall

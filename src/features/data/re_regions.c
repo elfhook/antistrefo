@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "features/code/re_jtable.h"
+#include "features/data/re_strings.h"
 #include "utils/sys/re_entropy.h"
 #include "utils/text/re_str.h"
 
@@ -110,22 +111,22 @@ static void tally_refs(const re_xrefset_t *xs, re_arena_t *a, uint64_t va, uint6
     r->n_data_refs = (uint32_t)RE_VEC_LEN(&hits);
 }
 
-// Jump tables are counted separately from other data references because one is a
-// structured artefact of code and the other is usually a constant: both point into
-// the region, but they mean different things to a reader. The caller passes the table
-// addresses already sorted, so this is a binary search rather than a walk of every
-// table in the image for every window, which would be quadratic.
-static void tally_jtables(const re_vec_t *jt, uint64_t va, uint64_t size, re_region_t *r) {
-    size_t n = jt ? RE_VEC_LEN(jt) : 0;
+// How many entries of an ascending address list land in [va, va+size). Used for both
+// jump tables and strings: each is a whole-image pass that is expensive to run and
+// trivial to search, so both are done once and indexed here.
+static uint32_t count_in(const re_vec_t *v, uint64_t va, uint64_t size) {
+    size_t n = v ? RE_VEC_LEN(v) : 0;
     size_t i = 0;
-    while (i < n && RE_VEC_AT(jt, uint64_t, i) < va)
+    while (i < n && RE_VEC_AT(v, uint64_t, i) < va)
         i++;
+    uint32_t got = 0;
     for (; i < n; i++) {
-        uint64_t t = RE_VEC_AT(jt, uint64_t, i);
+        uint64_t t = RE_VEC_AT(v, uint64_t, i);
         if (t >= va + size)
             break;
-        r->n_jtables++;
+        got++;
     }
+    return got;
 }
 
 const char *re_reg_kind_name(uint8_t kind) {
@@ -166,9 +167,14 @@ static void decide(re_region_t *r) {
         // section as low confidence, which is not what the evidence says.
         agree += 1u;
         agree += r->exec ? 1u : 0u;
-    } else if (r->n_jtables) {
+    } else if (r->n_strings || r->n_jtables) {
+        // Content, in a section whose permissions then decide whether it is data or
+        // rdata. A string in a read only section is rdata and a string in a writable
+        // one is data, and the two signals are counted separately because they are
+        // independent: plenty of regions hold a jump table or a string and nothing else.
         r->kind = r->writable ? RE_REG_DATA : RE_REG_RDATA;
-        agree += 1u;
+        agree += r->n_strings ? 1u : 0u;
+        agree += r->n_jtables ? 1u : 0u;
     } else if (r->n_data_refs) {
         r->kind = r->writable ? RE_REG_DATA : RE_REG_RDATA;
         agree += 1u;
@@ -187,7 +193,7 @@ static void decide(re_region_t *r) {
 }
 
 bool re_region_classify(re_code_t *c, const re_fscan_t *scan, const re_xrefset_t *xs,
-                        const re_pe_t *pe, const re_vec_t *jt, uint64_t va, uint64_t size,
+                        const re_pe_t *pe, const re_region_ev_t *ev, uint64_t va, uint64_t size,
                         re_region_t *out, re_arena_t *a) {
     if (!c || !pe || !out || !size)
         return false;
@@ -220,27 +226,56 @@ bool re_region_classify(re_code_t *c, const re_fscan_t *scan, const re_xrefset_t
     }
     tally_funcs(scan, va, size, out);
     tally_refs(xs, a, va, size, out);
-    tally_jtables(jt, va, size, out);
+    // Jump tables and strings are counted separately from other data references
+    // because they mean different things to a reader: a jump table is a structured
+    // artefact of code, a string is content, and a plain reference is usually a
+    // constant. All three point into the region and none of them implies the others.
+    out->n_jtables = count_in(ev ? ev->jtables : NULL, va, size);
+    out->n_strings = count_in(ev ? ev->strings : NULL, va, size);
     decide(out);
     return true;
+}
+
+// Both whole-image passes, done once and reduced to sorted address lists so the per
+// window count is a search rather than a rescan. Strings are found as file offsets
+// and have to be translated before they can be compared against a window.
+static void gather_evidence(re_code_t *c, const re_fscan_t *scan, const re_pe_t *pe, re_arena_t *a,
+                            re_vec_t *jt, re_vec_t *strs) {
+    re_vec_t found;
+    re_vec_init(&found, sizeof(re_jtable_t));
+    re_vec_init(jt, sizeof(uint64_t));
+    re_vec_init(strs, sizeof(uint64_t));
+    re_jtable_scan(c, scan, a, &found);
+    for (size_t i = 0; i < RE_VEC_LEN(&found); i++)
+        RE_VEC_PUSH(jt, a, RE_VEC_AT(&found, re_jtable_t, i).table_va);
+    sort_u64(RE_VEC_PTR(jt, uint64_t, 0), RE_VEC_LEN(jt));
+    re_strings_t s;
+    re_strings_init(&s);
+    re_strings_scan(c->img, 4, 20000, a, &s);
+    for (size_t i = 0; i < RE_VEC_LEN(&s.hits); i++) {
+        uint32_t rva = 0;
+        if (!re_pe_off2rva(pe, RE_VEC_AT(&s.hits, re_str_hit_t, i).off, &rva))
+            continue;
+        // Into a local first: the push macro takes the address of its value, and
+        // image_base + rva is not something that can be addressed.
+        uint64_t at = pe->image_base + rva;
+        RE_VEC_PUSH(strs, a, at);
+    }
+    sort_u64(RE_VEC_PTR(strs, uint64_t, 0), RE_VEC_LEN(strs));
 }
 
 size_t re_region_scan(re_code_t *c, const re_fscan_t *scan, const re_xrefset_t *xs,
                       const re_pe_t *pe, size_t win, re_vec_t *out, bool *truncated,
                       re_arena_t *a) {
+    re_vec_t jt;
+    re_vec_t strs;
+    re_region_ev_t ev;
     *truncated = false;
     if (!c || !pe || !win)
         return 0;
-    // Detected once for the image rather than once per window, and reduced to a
-    // sorted list of addresses so the per window count is a search.
-    re_vec_t found;
-    re_vec_t jt;
-    re_vec_init(&found, sizeof(re_jtable_t));
-    re_vec_init(&jt, sizeof(uint64_t));
-    re_jtable_scan(c, scan, a, &found);
-    for (size_t i = 0; i < RE_VEC_LEN(&found); i++)
-        RE_VEC_PUSH(&jt, a, RE_VEC_AT(&found, re_jtable_t, i).table_va);
-    sort_u64(RE_VEC_PTR(&jt, uint64_t, 0), RE_VEC_LEN(&jt));
+    gather_evidence(c, scan, pe, a, &jt, &strs);
+    ev.jtables = &jt;
+    ev.strings = &strs;
     uint64_t base = pe->image_base;
     // The virtual extent, not the file length. A section can sit at an RVA far beyond
     // the last byte in the file, so walking img.n would stop before reaching it and
@@ -252,7 +287,7 @@ size_t re_region_scan(re_code_t *c, const re_fscan_t *scan, const re_xrefset_t *
         uint64_t left = end - va;
         uint64_t n = left < (uint64_t)win ? left : (uint64_t)win;
         re_region_t r;
-        if (!re_region_classify(c, scan, xs, pe, &jt, va, n, &r, a))
+        if (!re_region_classify(c, scan, xs, pe, &ev, va, n, &r, a))
             break;
         if (!RE_VEC_PUSH(out, a, r)) {
             *truncated = true;

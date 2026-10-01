@@ -152,10 +152,11 @@ int re_render_regions(re_ctx_t *ctx, const char *path) {
     re_table_t tt;
     re_strbuf_t subj;
     re_strbuf_t sum;
-    static const size_t kWidths[9] = {14, 8, 8, 8, 7, 7, 7, 7, 0};
+    static const size_t kWidths[10] = {14, 8, 8, 8, 5, 6, 7, 5, 5, 0};
     const char *tabs[1] = {"regions"};
-    const char *cols[9] = {"rva", "kind", "conf", "section", "fns", "bytes", "refs", "jt", ""};
-    const char *cells[9];
+    const char *cols[10] = {"rva",   "kind", "conf", "section", "fns",
+                            "bytes", "strs", "refs", "jt",      ""};
+    const char *cells[10];
     if (!re_prepare(ctx, path, &f, &pe, &code))
         return re_err_exit_code(ctx->err->code);
     re_func_scan(&code, ctx->arena, &scan);
@@ -169,7 +170,7 @@ int re_render_regions(re_ctx_t *ctx, const char *path) {
     re_strbuf_puts(&subj, re_path_basename_ptr(path));
     re_strbuf_appendf(&sum, "%zu windows of 4096", RE_VEC_LEN(&out));
     re_report_head(&r, subj.p, sum.p);
-    re_table_begin(&tt, &r, "Code versus data", kWidths, 9);
+    re_table_begin(&tt, &r, "Code versus data", kWidths, 10);
     re_table_head(&tt, cols);
     for (size_t i = 0; i < RE_VEC_LEN(&out) && i < ctx->limit; i++) {
         const re_region_t *g = RE_VEC_PTR(&out, re_region_t, i);
@@ -179,9 +180,10 @@ int re_render_regions(re_ctx_t *ctx, const char *path) {
         cells[3] = g->sec[0] ? g->sec : "-";
         cells[4] = re_report_tmp(&r, "%u", g->n_funcs);
         cells[5] = re_report_tmp(&r, "%u", g->func_bytes);
-        cells[6] = re_report_tmp(&r, "%u", g->n_data_refs);
-        cells[7] = re_report_tmp(&r, "%u", g->n_jtables);
-        cells[8] = "";
+        cells[6] = re_report_tmp(&r, "%u", g->n_strings);
+        cells[7] = re_report_tmp(&r, "%u", g->n_data_refs);
+        cells[8] = re_report_tmp(&r, "%u", g->n_jtables);
+        cells[9] = "";
         re_table_row(&tt, cells);
     }
     re_table_end(&tt);

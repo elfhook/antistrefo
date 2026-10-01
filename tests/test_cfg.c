@@ -163,6 +163,61 @@ static void check_walk(re_code_t *code, const re_func_t *f, re_arena_t *a) {
     RE_CHECK_EQ_U(re_dc_label_of(&w, f->va + 1), 0);
 }
 
+static void drive_malformed(const uint8_t *bytes, size_t n);
+
+// The no-crash guarantee, on inputs that are not a valid image. A protected binary
+// arrives as a file whose headers may be inconsistent, and both of these walks trust
+// the PE enough to index off it, so a truncated or corrupted image is the case most
+// likely to read out of bounds. Reaching the end of this loop is the assertion: a
+// crash or a spin fails the binary or the CTest timeout, and neither can be caught
+// and turned into a passing check.
+static void check_malformed(void) {
+    static const size_t kCuts[] = {1, 0x20, 0x41, 0x58, 0x100, 0x148, 0x170, 0x1f0};
+    static const size_t kPokes[] = {0x3c, 0x44, 0x46, 0x58, 0x5a, 0x68, 0x148, 0x15c};
+    uint8_t img[HDRS + sizeof(kCode)];
+    uint8_t bad[HDRS + sizeof(kCode)];
+    size_t done = 0;
+    for (size_t ci = 0; ci < sizeof(kCuts) / sizeof(kCuts[0]); ci++) {
+        build_pe(img);
+        for (size_t pi = 0; pi < sizeof(kPokes) / sizeof(kPokes[0]); pi++) {
+            size_t cut = kCuts[ci] < sizeof(img) ? kCuts[ci] : sizeof(img);
+            memcpy(bad, img, cut);
+            if (pi < sizeof(kPokes) / sizeof(kPokes[0]) && kPokes[pi] < cut)
+                bad[kPokes[pi]] = (uint8_t)(0xA5u ^ (unsigned)pi);
+            drive_malformed(bad, cut);
+            done++;
+        }
+    }
+    RE_CHECK_EQ_U(done, sizeof(kCuts) / sizeof(kCuts[0]) * (sizeof(kPokes) / sizeof(kPokes[0])));
+}
+
+// Run both analyses over whatever it was given and require only that they return.
+static void drive_malformed(const uint8_t *bytes, size_t n) {
+    re_arena_t a;
+    re_pe_t pe;
+    re_code_t code;
+    re_fscan_t scan;
+    re_cfg_t g;
+    re_vec_t out;
+    bool truncated = false;
+    re_arena_init(&a, 65536);
+    re_span_t span = {(const uint8_t *)bytes, n};
+    if (re_pe_parse(span, &a, &pe) != RE_OK || !pe.valid) {
+        re_arena_free(&a);
+        return;
+    }
+    if (!re_code_init(&code, span, &pe, re_disasm_find("x86-64"), &a)) {
+        re_arena_free(&a);
+        return;
+    }
+    re_func_scan(&code, &a, &scan);
+    for (size_t i = 0; i < RE_VEC_LEN(&scan.funcs); i++)
+        re_cfg_build(&code, RE_VEC_PTR(&scan.funcs, re_func_t, i), &g, &a);
+    re_vec_init(&out, sizeof(re_region_t));
+    re_region_scan(&code, &scan, NULL, &pe, 512, &out, &truncated, &a);
+    re_arena_free(&a);
+}
+
 // The region classifier over the same fixture. The one section is executable and
 // holds a decoded function, so it must come back as code; and the window it sits in
 // starts below the first section, so the header region must come back unknown rather
@@ -228,6 +283,7 @@ int main(void) {
     check_graph(&code, &f, &a);
     check_walk(&code, &f, &a);
     check_regions(&code, &scan, &pe, &a);
+    check_malformed();
     re_arena_free(&a);
     return re_test_report("cfg");
 }

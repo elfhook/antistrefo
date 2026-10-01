@@ -147,6 +147,7 @@ static void region_row(re_jw_t *w, const re_region_t *r) {
     re_jw_ku64(w, "fill_pct", r->fill_pct);
     re_jw_ku64(w, "funcs", r->n_funcs);
     re_jw_ku64(w, "func_bytes", r->func_bytes);
+    re_jw_ku64(w, "strings", r->n_strings);
     re_jw_ku64(w, "data_refs", r->n_data_refs);
     re_jw_ku64(w, "jtables", r->n_jtables);
     re_jw_obj_end(w);
