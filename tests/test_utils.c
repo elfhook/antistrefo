@@ -395,6 +395,31 @@ int re_test_features(void);
 int re_test_count = 0;
 int re_test_fail = 0;
 
+// The MSVC demangler against symbols with known right answers. Content, not counts:
+// a demangler that rejects everything passes a count-only check, and one that answers
+// wrongly is worse than one that refuses.
+static void check_demangle(void) {
+    static const struct {
+        const char *sym;
+        const char *want;
+    } kCases[] = {
+        {"?foo@@YAXXZ", "foo()"},
+        {"?f@@YAXH@Z", "f(int)"},
+        {"?bar@@YAXPEBD@Z", "bar(char const *)"},
+        {"?g@@YAXPEAVfoo@@@Z", "g(foo const *)"},
+    };
+    for (size_t i = 0; i < sizeof(kCases) / sizeof(kCases[0]); i++) {
+        re_arena_t a;
+        re_str_t out = re_str("");
+        bool ok;
+        re_arena_init(&a, 4096);
+        ok = re_demangle_msvc(&a, kCases[i].sym, strlen(kCases[i].sym), &out);
+        RE_CHECK(ok);
+        RE_CHECK(re_str_eq_cstr(out, kCases[i].want));
+        re_arena_free(&a);
+    }
+}
+
 int main(void) {
     test_bits();
     test_hex();

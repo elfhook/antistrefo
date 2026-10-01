@@ -113,6 +113,9 @@ static bool is_user_class(char c) {
     return c == 'V' || c == 'U' || c == 'T' || c == 'W';
 }
 
+// Defined below, used above by the name parser.
+static void mv_skip_backref(mv_t *s);
+
 static const char *class_label(char kind) {
     if (kind == 'U')
         return " struct";
@@ -120,34 +123,20 @@ static const char *class_label(char kind) {
         return " union";
     if (kind == 'W')
         return " enum";
-    return " class";
+    // A class gets no keyword. In C++ a declaration does not need one, and IDA
+    // omits it, so printing one only makes the two renderings disagree.
+    return "";
 }
 
 static void mv_class(mv_t *s);
-
-// P introduces a pointer. The run of qualifier codes that follows carries the
-// cv and alignment of the pointee; they are dropped, so the pointee is printed
-// as a bare pointer rather than with qualifiers that may sit on the far side.
-static void mv_pointer(mv_t *s) {
-    while (s->p < s->end) {
-        char c = *s->p;
-        if (c != 'A' && c != 'B' && c != 'C' && c != 'D' && c != 'E' && c != 'F' && c != 'I')
-            break;
-        s->p++;
-    }
-    mv_puts(s, "*");
-    if (s->ok)
-        mv_class(s);
-}
+static void mv_pointer(mv_t *s);
 
 // ?AV, ?AU, ?AT and ?AW all carry the type by name. The name runs to the next
-// @ and may itself be a nested chain, which is why this cannot be a table.
+// @ and may itself be a nested chain, which is why this cannot be a table. The
+// kind has already been consumed by the caller, inline or after ?A.
 static void mv_user_class(mv_t *s, char kind) {
     const char *label = class_label(kind);
-    if (s->p < s->end)
-        s->p++;
-    if (s->p < s->end)
-        s->p++;
+    (void)kind;
     while (s->ok && s->p < s->end && *s->p != '@') {
         char c = *s->p;
         if (c == '?') {
@@ -161,33 +150,97 @@ static void mv_user_class(mv_t *s, char kind) {
     }
     while (s->ok && s->p < s->end && *s->p == '@')
         s->p++;
-    mv_puts(s, label);
+    mv_skip_backref(s);
+    if (label[0])
+        mv_puts(s, label);
+}
+
+// A backreference is digits standing for a name already used, and it is closed by
+// the @ that ends the type. It has to be skipped: left in place the digits are read
+// as the next type, and the rest of the symbol stops parsing.
+static void mv_skip_backref(mv_t *s) {
+    while (s->p < s->end && (*s->p == '?' || *s->p == '$' || (*s->p >= '0' && *s->p <= '9')))
+        s->p++;
+    if (s->p < s->end && *s->p == '@')
+        s->p++;
+}
+
+// A reference and the const that may follow it. Only consumed when a reference
+// marker is actually there: E on its own is the encoding for unsigned char, so
+// treating every leading E as const would silently turn an unsigned char
+// parameter into a const-qualified something else.
+static void mv_cv_ref(mv_t *s, bool *is_ref, bool *is_const) {
+    if (!at(s, 'A') && !at(s, 'Q') && !at(s, 'R'))
+        return;
+    *is_ref = true;
+    s->p++;
+    while (at(s, 'E') || at(s, 'B')) {
+        *is_const = true;
+        s->p++;
+    }
+}
+
+// P introduces a pointer. The run of qualifier codes that follows carries the cv
+// and alignment of the pointee; the const is kept so the declaration reads as
+// "char const *" rather than "char *", and the rest are dropped because they may
+// sit on the far side of the indirection.
+static void mv_pointer(mv_t *s) {
+    bool is_const = false;
+    while (s->p < s->end) {
+        char c = *s->p;
+        if (c == 'E' || c == 'B') {
+            is_const = true;
+            s->p++;
+            continue;
+        }
+        // C is volatile and A a further reference. D is deliberately absent: it is
+        // the encoding for char, a type rather than a modifier, and skipping it ate
+        // the pointee before the type parser ever saw it, which is why a symbol
+        // taking a const char* was rejected outright.
+        if (c == 'C' || c == 'A') {
+            s->p++;
+            continue;
+        }
+        break;
+    }
+    mv_class(s);
+    if (is_const)
+        mv_puts(s, " const");
+    mv_puts(s, " *");
 }
 
 static void mv_class(mv_t *s) {
+    bool is_ref = false;
+    bool is_const = false;
     if (at(s, '?') || at(s, '@')) {
         if (s->p + 1 < s->end && is_user_class(s->p[1])) {
-            mv_user_class(s, s->p[1]);
+            char kind = s->p[1];
+            s->p += 2;
+            mv_user_class(s, kind);
             return;
         }
         s->ok = false;
         return;
     }
-    if (at(s, 'X')) {
+    mv_cv_ref(s, &is_ref, &is_const);
+    // A class by name also appears with no ?A in front of it, as a return type or a
+    // parameter does. Only the leading form used to be accepted, so every symbol
+    // mentioning a class outside the name itself was rejected.
+    if (s->p < s->end && is_user_class(*s->p)) {
+        char kind = *s->p;
+        s->p++;
+        mv_user_class(s, kind);
+    } else if (at(s, 'X')) {
         s->p++;
         mv_puts(s, "void");
-        return;
-    }
-    if (at(s, 'F')) {
+    } else if (at(s, 'F')) {
         s->p++;
         if (s->p < s->end)
             s->p++;
         mv_puts(s, "void");
         if (s->p < s->end)
             s->p++;
-        return;
-    }
-    if (at(s, 'D')) {
+    } else if (at(s, 'D')) {
         s->p++;
         if (s->p < s->end && *s->p == 'P') {
             s->p++;
@@ -199,11 +252,21 @@ static void mv_class(mv_t *s) {
             mv_puts(s, "unsigned long long");
             return;
         }
+        // The code has already been consumed, so the primitive table cannot be asked
+        // for it again; char is named directly. Leaving it to the table looked up the
+        // character after the D and matched whatever followed, or nothing.
+        mv_puts(s, "char");
+    } else if (at(s, 'P')) {
+        s->p++;
+        mv_pointer(s);
+    } else if (!mv_primitive(s)) {
         s->ok = false;
         return;
     }
-    if (!mv_primitive(s))
-        s->ok = false;
+    if (is_const)
+        mv_puts(s, " const");
+    if (is_ref)
+        mv_puts(s, " &");
 }
 static void mv_type(mv_t *s) {
     if (!s->ok || s->p >= s->end) {
@@ -213,26 +276,53 @@ static void mv_type(mv_t *s) {
     mv_class(s);
 }
 
-// Copy the undecorated function name, stopping at the scope separators.
+// Copy the undecorated name, which is a chain of scope segments separated by single
+// @ and closed by @@. The segments are emitted outermost first and joined with ::, so
+// ?generic_category@system@boost@@ is boost::system::generic_category. Only the
+// innermost segment used to be read, with one @ skipped, which left the rest of the
+// chain in the stream and made every symbol in a namespace fail to parse.
+#define MV_MAX_SEGS 8
+
 static void mv_name(mv_t *s) {
+    const char *segs[MV_MAX_SEGS];
+    size_t lens[MV_MAX_SEGS];
+    size_t n = 0;
     if (s->p < s->end && *s->p == '?') {
         s->p++;
         if (s->p < s->end && *s->p == '?')
             s->p++;
     }
-    while (s->ok && s->p < s->end && *s->p != '@') {
-        char c = *s->p;
-        if (c == '?') {
+    while (s->p < s->end) {
+        if (*s->p == '@') {
             s->p++;
+            if (s->p < s->end && *s->p == '@') {
+                s->p++;
+                break; // @@ closes the name
+            }
             continue;
         }
-        if (c == '@')
-            break;
-        mv_putc(s, c);
-        s->p++;
+        const char *start = s->p;
+        while (s->p < s->end && *s->p != '@') {
+            if (*s->p != '?')
+                s->p++;
+            else
+                s->p++;
+        }
+        if (n < MV_MAX_SEGS) {
+            segs[n] = start;
+            lens[n] = (size_t)(s->p - start);
+            n++;
+        }
     }
-    while (s->ok && s->p < s->end && *s->p == '@')
-        s->p++;
+    for (size_t i = n; i > 0; i--) {
+        if (i != n)
+            mv_puts(s, "::");
+        for (size_t k = 0; k < lens[i - 1]; k++) {
+            if (segs[i - 1][k] == '?')
+                continue; // the nested-marker prefix, not part of the name
+            mv_putc(s, segs[i - 1][k]);
+        }
+    }
 }
 
 // Collect every encoded type into a vec. The last one is the return value.
@@ -252,19 +342,24 @@ static void mv_collect_types(mv_t *s, re_arena_t *a, re_vec_t *types) {
     }
 }
 
-// Render the parameter list. The last type is the return and is dropped; a lone
-// void in the parameter position is the marker for an empty list.
+// Render the parameter list. The FIRST type is the return and is dropped, not the
+// last: after the call convention the encoding is the return type followed by the
+// parameters, so ?f@@YAXH@Z is void f(int) and the two X's in ?foo@@YAXXZ are a void
+// return and a void parameter list. Treating the last type as the return made that
+// one print as f(), which is a wrong answer rather than a rejected symbol, and a
+// wrong answer is worse: it looks like knowledge. A lone void in the parameter
+// position is the marker for an empty list.
 static void mv_signature(mv_t *s, const re_vec_t *types) {
     size_t count = RE_VEC_LEN(types);
     size_t nparams = count ? count - 1u : 0u;
     if (nparams == 1) {
-        const re_str_t *first = RE_VEC_PTR(types, re_str_t, 0);
-        if (re_str_eq_cstr(*first, "void"))
+        const re_str_t *only = RE_VEC_PTR(types, re_str_t, 1);
+        if (re_str_eq_cstr(*only, "void"))
             nparams = 0;
     }
     mv_puts(s, "(");
-    for (size_t i = 0; i < nparams; i++) {
-        if (i)
+    for (size_t i = 1; i <= nparams; i++) {
+        if (i > 1)
             mv_puts(s, ", ");
         const re_str_t *t = RE_VEC_PTR(types, re_str_t, i);
         mv_putn(s, t->p, t->n);
