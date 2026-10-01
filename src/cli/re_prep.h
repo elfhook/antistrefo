@@ -12,12 +12,12 @@ extern "C" {
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "features/re_code.h"
-#include "features/re_disasm.h"
-#include "features/re_pe.h"
-#include "utils/re_arena.h"
-#include "utils/re_json.h"
-#include "utils/re_str.h"
+#include "features/code/re_code.h"
+#include "features/meta/re_disasm.h"
+#include "features/pe/re_pe.h"
+#include "utils/json/re_json.h"
+#include "utils/mem/re_arena.h"
+#include "utils/text/re_str.h"
 #include "cli/re_table.h"
 
 #define RE_SCHEMA "antistrefo/1"

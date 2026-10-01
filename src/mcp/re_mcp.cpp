@@ -4,8 +4,8 @@
 // Depends: re_mcp.h, re_jr, re_json, re_table, re_cmds. Writes to stdout only frames.
 #include "mcp/re_mcp.h"
 
-#include "utils/re_jr.h"
-#include "utils/re_util.h"
+#include "utils/json/re_jr.h"
+#include "utils/text/re_util.h"
 #include "cli/re_cmds.h"
 #include "cli/re_table.h"
 

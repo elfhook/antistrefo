@@ -11,7 +11,7 @@
 #    include <windows.h>
 #endif
 
-#include "utils/re_util.h"
+#include "utils/text/re_util.h"
 #include "cli/re_cmds.h"
 #include "cli/re_shell.h"
 #include "cli/re_table.h"

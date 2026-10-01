@@ -11,9 +11,9 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "utils/re_arena.h"
-#include "utils/re_strbuf.h"
-#include "utils/re_tui.h"
+#include "utils/mem/re_arena.h"
+#include "utils/text/re_strbuf.h"
+#include "utils/tui/re_tui.h"
 
 // This suite is its own binary, so it owns its counters.
 int re_test_count = 0;

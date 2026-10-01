@@ -2,15 +2,14 @@
 // Module: test (C11).
 // Owns: correctness checks for re_search, re_demangle, re_time and re_entropy.
 // Depends: re_core and re_utils. Prints to stdout, which is fine for a test binary.
+#include "features/data/re_search.h"
+#include "features/lib/re_demangle.h"
+#include "utils/sys/re_entropy.h"
+#include "utils/sys/re_time.h"
+#include "utils/text/re_util.h"
 #include "re_test.h"
-#include "features/re_demangle.h"
-#include "features/re_search.h"
-#include "utils/re_entropy.h"
-#include "utils/re_time.h"
-#include "utils/re_util.h"
 
-static void test_time(void)
-{
+static void test_time(void) {
     char buf[24];
     re_time_iso(0, buf, sizeof(buf));
     RE_CHECK(strcmp(buf, "1970-01-01T00:00:00Z") == 0);
@@ -45,8 +44,7 @@ typedef struct {
     size_t main;
 } hay_t;
 
-static hay_t make_hay(uint8_t *buf)
-{
+static hay_t make_hay(uint8_t *buf) {
     static const uint8_t pat4[4] = {0xde, 0xad, 0xbe, 0xef};
     static const uint8_t needle[6] = {'N', 'E', 'E', 'D', 'L', 'E'};
     size_t n = 0;
@@ -84,8 +82,7 @@ static hay_t make_hay(uint8_t *buf)
 
 // A wildcard byte matches anything, and a non matching literal is a miss. Bad
 // and ambiguous patterns are refused rather than guessed at.
-static void test_search_patterns(re_arena_t *a, const hay_t *h)
-{
+static void test_search_patterns(re_arena_t *a, const hay_t *h) {
     re_search_t s;
     uint8_t *by = NULL;
     uint8_t *mk = NULL;
@@ -114,8 +111,7 @@ static void test_search_patterns(re_arena_t *a, const hay_t *h)
 
 // Both endiannesses, so 0x00AD matches ad 00 and also 00 ad where the high byte
 // of the preceding wide character happens to be zero.
-static void test_search_immediate(re_arena_t *a, const hay_t *h)
-{
+static void test_search_immediate(re_arena_t *a, const hay_t *h) {
     re_search_t s;
     re_search_init(&s);
     re_search_immediate(h->img, 0xDEADBEEFu, 4, true, 0, 0, a, &s);
@@ -134,8 +130,7 @@ static void test_search_immediate(re_arena_t *a, const hay_t *h)
 
 // A hit list must name each offset once. The wide scan used to rebuild a run
 // once per character, so one match was reported several times over.
-static void check_offsets_distinct(const re_search_t *s)
-{
+static void check_offsets_distinct(const re_search_t *s) {
     for (size_t i = 0; i < RE_VEC_LEN(&s->hits); i++) {
         for (size_t j = i + 1; j < RE_VEC_LEN(&s->hits); j++) {
             if (RE_VEC_AT(&s->hits, re_search_hit_t, i).off ==
@@ -147,8 +142,7 @@ static void check_offsets_distinct(const re_search_t *s)
 
 // Text search must find both the ascii copy and the narrowed utf-16 copy, and a
 // regex must also see through the wide copy.
-static void test_search_text(re_arena_t *a, const hay_t *h)
-{
+static void test_search_text(re_arena_t *a, const hay_t *h) {
     re_search_t s;
     re_search_init(&s);
     re_search_text(h->img, re_str("NEEDLE"), false, false, false, 0, 0, a, &s);
@@ -176,8 +170,7 @@ static void test_search_text(re_arena_t *a, const hay_t *h)
 
 // A signature style search must not match inside a longer word, so the standalone
 // main is a hit while the one inside domain is a miss.
-static void test_search_signature(re_arena_t *a, const hay_t *h)
-{
+static void test_search_signature(re_arena_t *a, const hay_t *h) {
     re_search_t s;
     re_search_init(&s);
     re_search_signature(h->img, re_str("main"), 0, 0, a, &s);
@@ -192,8 +185,7 @@ static void test_search_signature(re_arena_t *a, const hay_t *h)
 
 // The limit caps what is kept and the scan stops there, so total is a floor and
 // more has to say so. A limited search must never look complete when it is not.
-static void test_search_limit(re_arena_t *a, const hay_t *h)
-{
+static void test_search_limit(re_arena_t *a, const hay_t *h) {
     re_search_t s;
     re_search_init(&s);
     re_search_text(h->img, re_str("NEEDLE"), false, false, false, 0, 1, a, &s);
@@ -215,8 +207,7 @@ static void test_search_limit(re_arena_t *a, const hay_t *h)
     RE_CHECK_EQ_U(s.total, 0);
 }
 
-static void test_search(void)
-{
+static void test_search(void) {
     re_arena_t a;
     re_arena_init(&a, 0);
     uint8_t buf[256];
@@ -229,8 +220,7 @@ static void test_search(void)
     re_arena_free(&a);
 }
 
-static void test_demangle(void)
-{
+static void test_demangle(void) {
     re_arena_t a;
     re_arena_init(&a, 0);
     re_str_t out;
@@ -273,8 +263,7 @@ static void test_demangle(void)
     re_arena_free(&a);
 }
 
-static void test_entropy(void)
-{
+static void test_entropy(void) {
     // Uniform data is maximal, a single repeated byte is zero.
     uint8_t zero[512];
     for (int i = 0; i < 512; i++)
@@ -288,9 +277,7 @@ static void test_entropy(void)
     RE_CHECK_EQ_U((uint64_t)re_entropy(re_span_none()), 0);
 }
 
-
-int re_test_features(void)
-{
+int re_test_features(void) {
     test_time();
     test_search();
     test_demangle();

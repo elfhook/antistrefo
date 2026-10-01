@@ -48,8 +48,8 @@ else()
 endif()
 
 # ---- re_utils: the shared utility layer, C11, no exceptions and no globals ----
-file(GLOB RE_UTIL_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/utils/*.c)
-file(GLOB RE_UTIL_HEADERS CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/utils/*.h)
+file(GLOB_RECURSE RE_UTIL_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/utils/*.c)
+file(GLOB_RECURSE RE_UTIL_HEADERS CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/utils/*.h)
 
 add_library(re_utils STATIC ${RE_UTIL_SOURCES} ${RE_UTIL_HEADERS})
 target_include_directories(re_utils PUBLIC ${CMAKE_SOURCE_DIR}/src)

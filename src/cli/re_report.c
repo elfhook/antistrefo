@@ -8,8 +8,8 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "utils/re_fmt.h"
-#include "utils/re_tui.h"
+#include "utils/text/re_fmt.h"
+#include "utils/tui/re_tui.h"
 
 bool re_report_wanted(const re_ctx_t *ctx) {
     // An explicit --format is the caller speaking, and it always wins. Otherwise the

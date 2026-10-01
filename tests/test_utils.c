@@ -2,23 +2,23 @@
 // Module: test (C11).
 // Owns: correctness checks for arena, string, container, hash, crc and regex code.
 // Depends: re_utils only. Prints to stdout, which is fine for a test binary.
+#include "features/data/re_search.h"
+#include "features/lib/re_demangle.h"
+#include "utils/sys/re_entropy.h"
+#include "utils/sys/re_time.h"
+#include "utils/text/re_util.h"
 #include "re_test.h"
-#include "features/re_demangle.h"
-#include "features/re_search.h"
-#include "utils/re_entropy.h"
-#include "utils/re_time.h"
-#include "utils/re_util.h"
 
 #include <string.h>
 
-static void test_bits(void)
-{
+static void test_bits(void) {
     RE_CHECK_EQ_U(re_bits_popcount(0), 0);
     RE_CHECK_EQ_U(re_bits_popcount(0xffffffffffffffffULL), 64);
     RE_CHECK_EQ_U(re_bits_popcount(0x8000000000000000ULL), 1);
     RE_CHECK_EQ_U(re_bits_ctz64(8), 3);
     RE_CHECK_EQ_U(re_bits_clz64(1), 63);
-    RE_CHECK_EQ_U(re_bits_rotr64(re_bits_rotl64(0x123456789abcdef0ULL, 16), 16), 0x123456789abcdef0ULL);
+    RE_CHECK_EQ_U(re_bits_rotr64(re_bits_rotl64(0x123456789abcdef0ULL, 16), 16),
+                  0x123456789abcdef0ULL);
     RE_CHECK_EQ_HEX(re_bswap32(0x11223344u), 0x44332211u);
     RE_CHECK_EQ_HEX(re_bswap16(0x1234u), 0x3412u);
     RE_CHECK(re_align_up(5, 8) == 8);
@@ -27,8 +27,7 @@ static void test_bits(void)
     RE_CHECK(!re_bits_is_pow2(63));
 }
 
-static void test_hex(void)
-{
+static void test_hex(void) {
     const uint8_t data[4] = {0xde, 0xad, 0xbe, 0xef};
     char out[16];
     re_hex_encode(out, data, 4);
@@ -49,8 +48,7 @@ static void test_hex(void)
     RE_CHECK_EQ_U(re_hex_run_len("zz", 2), 0);
 }
 
-static void test_arena(void)
-{
+static void test_arena(void) {
     re_arena_t a;
     re_arena_init(&a, 0);
     void *first = re_arena_alloc(&a, 24);
@@ -78,8 +76,7 @@ static void test_arena(void)
     RE_CHECK(a.head == NULL);
 }
 
-static void test_str(void)
-{
+static void test_str(void) {
     re_str_t a = re_str("Hello, World");
     RE_CHECK_EQ_U(a.n, 12);
     RE_CHECK(re_str_eq_cstr(a, "Hello, World"));
@@ -99,8 +96,7 @@ static void test_str(void)
     RE_CHECK_EQ_U(re_str_rfind_char(re_strn("a/b/c", 5), '/', 5), 3);
 }
 
-static void test_strbuf(void)
-{
+static void test_strbuf(void) {
     re_arena_t a;
     re_arena_init(&a, 0);
     re_strbuf_t b;
@@ -123,16 +119,14 @@ static void test_strbuf(void)
     re_arena_free(&a);
 }
 
-static int cmp_int(const void *x, const void *y, void *ctx)
-{
+static int cmp_int(const void *x, const void *y, void *ctx) {
     (void)ctx;
     int a = *(const int *)x;
     int b = *(const int *)y;
     return (a > b) - (a < b);
 }
 
-static void test_vec_and_sort(void)
-{
+static void test_vec_and_sort(void) {
     re_arena_t a;
     re_arena_init(&a, 0);
     re_vec_t v;
@@ -158,8 +152,7 @@ static void test_vec_and_sort(void)
     re_arena_free(&a);
 }
 
-static void test_map_and_set(void)
-{
+static void test_map_and_set(void) {
     re_arena_t a;
     re_arena_init(&a, 0);
     re_map_t m;
@@ -189,8 +182,7 @@ static void test_map_and_set(void)
     re_arena_free(&a);
 }
 
-static void test_path(void)
-{
+static void test_path(void) {
     re_arena_t a;
     re_arena_init(&a, 0);
     RE_CHECK(re_path_is_abs("/usr/bin"));
@@ -210,8 +202,7 @@ static void test_path(void)
     re_arena_free(&a);
 }
 
-static void test_crc_and_hash(void)
-{
+static void test_crc_and_hash(void) {
     re_crc_init();
     RE_CHECK_EQ_HEX(re_crc32_ieee_final("123456789", 9), 0xcbf43926u);
     RE_CHECK_EQ_HEX(re_crc16_x25_final("123456789", 9), 0x906eu);
@@ -248,8 +239,7 @@ static void test_crc_and_hash(void)
     RE_CHECK(strcmp(hex6, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad") == 0);
 }
 
-static void test_regex(void)
-{
+static void test_regex(void) {
     re_arena_t a;
     re_arena_init(&a, 0);
     re_err_t err;
@@ -295,8 +285,7 @@ static void test_regex(void)
     re_arena_free(&a);
 }
 
-static void test_fmt(void)
-{
+static void test_fmt(void) {
     re_arena_t a;
     re_arena_init(&a, 0);
     re_strbuf_t b;
@@ -318,8 +307,7 @@ static void test_fmt(void)
     re_arena_free(&a);
 }
 
-static void test_err(void)
-{
+static void test_err(void) {
     re_err_t e;
     RE_ERR_OK(&e);
     RE_CHECK(re_err_ok(&e));
@@ -335,8 +323,7 @@ static void test_err(void)
     RE_CHECK(strcmp(re_err_str(RE_E_RANGE), "read out of bounds") == 0);
 }
 
-static void test_json(void)
-{
+static void test_json(void) {
     re_arena_t a;
     re_arena_init(&a, 0);
     re_jw_t w;
@@ -390,8 +377,7 @@ static void test_json(void)
     re_arena_free(&a);
 }
 
-static void test_str_split_join(void)
-{
+static void test_str_split_join(void) {
     re_arena_t a;
     re_arena_init(&a, 0);
     re_vec_t parts = re_str_split(&a, re_str("a,bb,,ccc"), ',');
@@ -409,8 +395,7 @@ int re_test_features(void);
 int re_test_count = 0;
 int re_test_fail = 0;
 
-int main(void)
-{
+int main(void) {
     test_bits();
     test_hex();
     test_arena();

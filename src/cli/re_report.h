@@ -17,9 +17,9 @@ extern "C" {
 #include <stddef.h>
 #include <stdint.h>
 
-#include "utils/re_arena.h"
-#include "utils/re_strbuf.h"
-#include "utils/re_tui.h"
+#include "utils/mem/re_arena.h"
+#include "utils/text/re_strbuf.h"
+#include "utils/tui/re_tui.h"
 #include "cli/re_table.h"
 
 // A report in progress: the buffer it is written into, the tui state, and the panels

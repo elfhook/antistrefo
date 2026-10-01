@@ -9,7 +9,7 @@
 //           lives in the IR, which is itself per function.
 #include "features/disasm/re_x64_priv.h"
 
-#include "features/re_ir.h"
+#include "features/dec/re_ir.h"
 
 // The operation size in bytes. Most forms follow the operand size prefix, but a few
 // have their own width and get it wrong if the prefix is consulted instead. Only 0x82

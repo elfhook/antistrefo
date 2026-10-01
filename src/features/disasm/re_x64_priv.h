@@ -8,7 +8,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "features/re_disasm.h"
+#include "features/meta/re_disasm.h"
 
 // What an opcode does to the instruction stream. The decoder only needs to know
 // whether a ModRM follows and how wide the immediate is, so a class is the whole

@@ -4,8 +4,8 @@
 // Depends: re_prep.h.
 #include "cli/re_prep.h"
 
-#include "features/re_format.h"
-#include "utils/re_hex.h"
+#include "features/pe/re_format.h"
+#include "utils/text/re_hex.h"
 
 bool re_prepare(re_ctx_t *ctx, const char *path, re_file_t *f, re_pe_t *pe, re_code_t *code) {
     re_err_code_t e = re_file_open(path, ctx->arena, f);

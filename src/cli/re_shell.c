@@ -5,8 +5,8 @@
 //           same command table the argv path uses, so this is not a second tool.
 #include "cli/re_shell.h"
 
-#include "utils/re_str.h"
-#include "utils/re_tui.h"
+#include "utils/text/re_str.h"
+#include "utils/tui/re_tui.h"
 #include "cli/re_report.h"
 
 #include <stdio.h>

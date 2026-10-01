@@ -56,14 +56,18 @@ is `re_`. Do not unify them without a strong reason.
     docs/util-catalog.md util lookup table (read before writing new code)
     scripts/check.py     the gate
     scripts/format.ps1   format wrapper
-    src/utils/           shared utilities - headers and sources together
-    src/features/<name>/ one directory per feature, re_<name>.h + re_<name>.c
+    src/utils/<cat>/      shared utilities, grouped: text mem algo sys json tui
+    src/features/<cat>/   one directory per analysis area, e.g. code dec data pe lib meta
     src/cli/             argv dispatch, text rendering (C++17)
     src/mcp/             MCP stdio server (C++17)
     tests/               CTest targets
     Tools/               reserved, not ours
 
-Include path root is `src/`, so utils are reached as `#include "utils/re_arena.h"`.
+Include path root is `src/`, so utils are reached as `#include "utils/mem/re_arena.h"`
+and features as `#include "features/pe/re_pe.h"`.
+
+Rule: a folder holding more than 15 files is too cluttered and must be divided
+into sub folders by category. Keep every folder at 15 or fewer.
 
 ## 3. Banner spec
 

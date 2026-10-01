@@ -7,16 +7,16 @@
 
 #include <stdio.h>
 
-#include "features/re_demangle.h"
-#include "features/re_format.h"
-#include "features/re_pe.h"
-#include "features/re_rules.h"
-#include "features/re_search.h"
-#include "features/re_strings.h"
-#include "utils/re_buf.h"
-#include "utils/re_entropy.h"
-#include "utils/re_json.h"
-#include "utils/re_util.h"
+#include "features/data/re_rules.h"
+#include "features/data/re_search.h"
+#include "features/data/re_strings.h"
+#include "features/lib/re_demangle.h"
+#include "features/pe/re_format.h"
+#include "features/pe/re_pe.h"
+#include "utils/json/re_json.h"
+#include "utils/mem/re_buf.h"
+#include "utils/sys/re_entropy.h"
+#include "utils/text/re_util.h"
 
 #define SCHEMA2 "antistrefo/1"
 

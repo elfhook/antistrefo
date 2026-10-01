@@ -9,17 +9,17 @@
 
 #include "cli/re_prep.h"
 
-#include "features/re_code.h"
-#include "features/re_disasm.h"
-#include "features/re_flirt.h"
-#include "features/re_format.h"
-#include "features/re_func.h"
-#include "features/re_jtable.h"
-#include "features/re_pe.h"
-#include "features/re_stack.h"
-#include "features/re_xref.h"
-#include "utils/re_json.h"
-#include "utils/re_strbuf.h"
+#include "features/code/re_code.h"
+#include "features/code/re_func.h"
+#include "features/code/re_jtable.h"
+#include "features/code/re_stack.h"
+#include "features/code/re_xref.h"
+#include "features/lib/re_flirt.h"
+#include "features/meta/re_disasm.h"
+#include "features/pe/re_format.h"
+#include "features/pe/re_pe.h"
+#include "utils/json/re_json.h"
+#include "utils/text/re_strbuf.h"
 
 #include "cli/re_cmds3.h"
 

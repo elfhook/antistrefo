@@ -6,7 +6,7 @@
 
 #include "features/disasm/re_x64_tab.h"
 #include "features/disasm/re_x64_tab0f.h"
-#include "utils/re_strbuf.h"
+#include "utils/text/re_strbuf.h"
 
 // The group opcodes pick their mnemonic from the reg field, which is why the
 // table only had a placeholder for them.

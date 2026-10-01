@@ -11,10 +11,10 @@ extern "C" {
 #include <stddef.h>
 #include <stdint.h>
 
-#include "utils/re_arena.h"
-#include "utils/re_err.h"
-#include "utils/re_str.h"
-#include "utils/re_strbuf.h"
+#include "utils/mem/re_arena.h"
+#include "utils/sys/re_err.h"
+#include "utils/text/re_str.h"
+#include "utils/text/re_strbuf.h"
 
 #define RE_CMD_NAME_MAX 24
 #define RE_CMD_SUMMARY_MAX 96

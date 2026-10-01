@@ -2,7 +2,7 @@
 // Module: feature (C11).
 // Owns: the table of backends, the lookup by name, and the RE_ENABLE_DISASM gate.
 // Depends: re_disasm.h. A parse-only build resolves every lookup to NULL.
-#include "features/re_disasm.h"
+#include "features/meta/re_disasm.h"
 
 #include <stddef.h>
 

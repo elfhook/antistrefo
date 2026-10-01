@@ -11,12 +11,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "features/re_disasm.h"
-#include "features/re_ir.h"
-#include "utils/re_arena.h"
-#include "utils/re_buf.h"
-#include "utils/re_hex.h"
-#include "utils/re_str.h"
+#include "features/dec/re_ir.h"
+#include "features/meta/re_disasm.h"
+#include "utils/mem/re_arena.h"
+#include "utils/mem/re_buf.h"
+#include "utils/text/re_hex.h"
+#include "utils/text/re_str.h"
 
 typedef struct {
     const char *name;
