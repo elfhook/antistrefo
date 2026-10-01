@@ -76,6 +76,19 @@ bool re_tui_want_color(void);
 // exists because a report that is all mojibake is worse than one with plain dashes.
 bool re_tui_want_unicode(void);
 
+// Set the stream mode for this process. Binary is required by the MCP transport,
+// which specifies one JSON object followed by a single \n and nothing else, and is
+// wrong for a terminal, where a bare \n does not return the cursor to column 0 and
+// every line after the first would be staircased. The caller says which it is rather
+// than this guessing, because only the caller knows the protocol.
+void re_tui_set_stream_mode(bool binary);
+
+// True when the console can be trusted with the box characters: not a pipe, and on
+// Windows a console whose output code page is UTF-8. The code page is read rather
+// than set, because changing it would be a side effect on the user's shell, which is
+// not this program's to impose.
+bool re_tui_console_utf8(void);
+
 // scratch is a buffer the header borrows to build a styled run. It must outlive the
 // re_tui_t and needs no initialisation, because every use clears it first.
 void re_tui_init(re_tui_t *t, re_strbuf_t *out, re_strbuf_t *scratch, bool color, bool unicode,

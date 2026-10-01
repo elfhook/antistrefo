@@ -8,6 +8,7 @@
 #if defined(_WIN32)
 #    include <fcntl.h>
 #    include <io.h>
+#    include <windows.h>
 #endif
 
 #include "utils/re_util.h"
@@ -76,17 +77,84 @@ int run_shell() {
     return rc;
 }
 
+// Windows Terminal renders the box drawing characters only under a UTF-8 output code
+// page. A console inherited from cmd is usually CP437, and UTF-8 bytes decoded as CP437
+// come out as mojibake, which is what the frame turns into if this is not done.
+//
+// The code page belongs to the console, which is shared with whatever shell started us,
+// so it is put back when this object dies. That matters for a one shot command and it
+// matters more for the shell, which can sit here for a long time and should leave the
+// user's terminal as it found it.
+class Utf8Console {
+  public:
+    explicit Utf8Console(bool on) {
+#if defined(_WIN32)
+        if (on && _isatty(_fileno(stdout))) {
+            m_old = GetConsoleOutputCP();
+            if (m_old != 65001u)
+                m_changed = SetConsoleOutputCP(65001u) != 0;
+        }
+#else
+        (void)on;
+#endif
+    }
+    ~Utf8Console() {
+#if defined(_WIN32)
+        if (m_changed)
+            SetConsoleOutputCP(m_old);
+#endif
+    }
+    Utf8Console(const Utf8Console &) = delete;
+    Utf8Console &operator=(const Utf8Console &) = delete;
+
+  private:
+#if defined(_WIN32)
+    UINT m_old = 0;
+    bool m_changed = false;
+#endif
+};
+
 } // namespace
+
+// Run one command from argv and return its exit code. Split out of main so main stays
+// about startup and dispatch order, which is what it is actually for.
+int run_one(const re_cmd_t *cmd, int argc, char **argv) {
+    re_arena_t arena;
+    re_err_t err{};
+    re_ctx_t ctx{};
+    re_arena_init(&arena, 256u * 1024u);
+    err.code = RE_OK;
+    ctx.arena = &arena;
+    ctx.err = &err;
+    int first = 0;
+    if (!re_cmd_parse(&ctx, argc - 2, argv + 2, &first, &err)) {
+        re_arena_free(&arena);
+        return report_error(err);
+    }
+    const char *path = first < (argc - 2) ? argv[2 + first] : nullptr;
+    if (!path) {
+        re_arena_free(&arena);
+        RE_ERR_SETF(&err, RE_E_USAGE, "%s needs a file, usage: %s", cmd->name, cmd->usage);
+        return report_error(err);
+    }
+    int code = cmd->fn(&ctx, path, argc - 2 - first, argv + 2 + first);
+    re_arena_free(&arena);
+    return code;
+}
 
 int main(int argc, char **argv) {
     re_log_init_from_env();
     re_crc_init();
-#if defined(_WIN32)
-    // Binary stdout so the response is exactly one JSON object plus \n. Text mode
-    // would rewrite that to \r\n, and the mcp contract specifies \n.
-    _setmode(_fileno(stdout), _O_BINARY);
-    _setmode(_fileno(stderr), _O_BINARY);
-#endif
+    // The stream mode depends on which mode of the tool this is, and only main knows.
+    // The MCP transport specifies one JSON object followed by a single \n and nothing
+    // else, so it needs binary. Everything else is being read by a person, and in
+    // binary mode a bare \n does not return the cursor to column 0 on Windows, so
+    // every line after the first would be staircased across the screen.
+    bool mcp_mode = argc >= 2 && re_str_eq_cstr(re_str(argv[1]), "mcp");
+    re_tui_set_stream_mode(mcp_mode);
+    // Only a person looking at the output gets the code page changed. The MCP
+    // transport is a byte stream and is not ours to re-encode.
+    Utf8Console console(!mcp_mode);
 
     if (argc < 2) {
         // No arguments means a person opened the binary, most likely by double
@@ -115,26 +183,5 @@ int main(int argc, char **argv) {
     }
     if (re_str_eq_cstr(re_str(cmd->name), "mcp"))
         return re_mcp_main();
-
-    re_arena_t arena;
-    re_arena_init(&arena, 256u * 1024u);
-    re_err_t err{};
-    err.code = RE_OK;
-    re_ctx_t ctx{};
-    ctx.arena = &arena;
-    ctx.err = &err;
-    int first = 0;
-    if (!re_cmd_parse(&ctx, argc - 2, argv + 2, &first, &err)) {
-        re_arena_free(&arena);
-        return report_error(err);
-    }
-    const char *path = first < (argc - 2) ? argv[2 + first] : nullptr;
-    if (!path) {
-        re_arena_free(&arena);
-        RE_ERR_SETF(&err, RE_E_USAGE, "%s needs a file, usage: %s", cmd->name, cmd->usage);
-        return report_error(err);
-    }
-    int code = cmd->fn(&ctx, path, argc - 2 - first, argv + 2 + first);
-    re_arena_free(&arena);
-    return code;
+    return run_one(cmd, argc, argv);
 }

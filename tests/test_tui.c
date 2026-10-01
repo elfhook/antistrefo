@@ -234,7 +234,16 @@ static void test_env(void) {
     _putenv("RE_TUI_ASCII=1");
     RE_CHECK(!re_tui_want_unicode());
     _putenv("RE_TUI_ASCII=");
+    // With no terminal and no override, the answer is no: this suite runs under a pipe,
+    // and claiming the box characters would be a lie about where the output is going.
+    RE_CHECK(!re_tui_want_unicode());
+    // The override exists for exactly the case the automatic answer cannot cover, which
+    // is a console that reports a code page it does not actually use.
+    _putenv("RE_TUI_UNICODE=1");
     RE_CHECK(re_tui_want_unicode());
+    _putenv("RE_TUI_UNICODE=");
+    // A pipe is never a terminal, whatever the overrides say about the encoding.
+    RE_CHECK(!re_tui_console_utf8());
     _putenv("COLUMNS=100");
     RE_CHECK_EQ_U(re_tui_term_width(), 100);
     _putenv("COLUMNS=5");

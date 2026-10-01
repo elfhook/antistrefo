@@ -8,7 +8,12 @@
 #include <string.h>
 
 #if defined(_WIN32)
+// fcntl for the _O_TEXT and _O_BINARY modes, io for the stream handles, and
+// windows.h for the console code page. The order matters: windows.h pulls in a great
+// deal, and it wants these two first.
+#    include <fcntl.h>
 #    include <io.h>
+#    include <windows.h>
 #    define RE_ISATTY(fd) _isatty(fd)
 #    define RE_FILENO(f) _fileno(f)
 #else
@@ -62,12 +67,43 @@ bool re_tui_want_color(void) {
     return !(nc != NULL);
 }
 
+bool re_tui_console_utf8(void) {
+    if (!re_tui_is_tty())
+        return false;
+#if defined(_WIN32)
+    // CP_UTF8 is 65001. Anything else means the console would decode our box
+    // characters with the OEM code page, and a report drawn in those looks like
+    // corruption rather than like a report.
+    return GetConsoleOutputCP() == 65001u;
+#else
+    // A POSIX terminal takes the bytes as they are, so there is nothing to check.
+    return true;
+#endif
+}
+
 bool re_tui_want_unicode(void) {
-    // Windows Terminal and every POSIX terminal render UTF-8, so the default is yes.
-    // The ascii path is for a pipe that a person still has to read, where the box
-    // characters would otherwise be mojibake in a log.
+    // An explicit override wins, so a user on a console that misreports its code page
+    // can get the characters they want, and a log can be forced to plain ASCII.
+    const char *force = getenv("RE_TUI_UNICODE");
+    if (force && *force)
+        return true;
     const char *legacy = getenv("RE_TUI_ASCII");
-    return !(legacy != NULL);
+    if (legacy && *legacy)
+        return false;
+    return re_tui_console_utf8();
+}
+
+void re_tui_set_stream_mode(bool binary) {
+#if defined(_WIN32)
+    // Text mode is what a terminal needs, because it is the mode in which a newline
+    // returns the cursor to column 0. Binary is what the MCP contract needs, because
+    // it specifies one object and a single \n with no translation of either.
+    int mode = binary ? _O_BINARY : _O_TEXT;
+    _setmode(_fileno(stdout), mode);
+    _setmode(_fileno(stderr), mode);
+#else
+    (void)binary; // POSIX streams have no text or binary mode to choose between
+#endif
 }
 
 void re_tui_init(re_tui_t *t, re_strbuf_t *out, re_strbuf_t *scratch, bool color, bool unicode,
