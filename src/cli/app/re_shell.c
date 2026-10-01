@@ -3,11 +3,11 @@
 // Owns: the prompt loop, line splitting, and the remembered current file.
 // Depends: re_shell.h, re_table, re_report, re_tui, re_cmds. Dispatches through the
 //           same command table the argv path uses, so this is not a second tool.
-#include "cli/re_shell.h"
+#include "cli/app/re_shell.h"
 
 #include "utils/text/re_str.h"
 #include "utils/tui/re_tui.h"
-#include "cli/re_report.h"
+#include "cli/render/re_report.h"
 
 #include <stdio.h>
 #include <stdlib.h>

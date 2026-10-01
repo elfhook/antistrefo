@@ -2,12 +2,12 @@
 // Module: cli (C11).
 // Owns: the funcs, disasm and xrefs commands, and the code map they share.
 // Depends: re_code, re_func, re_xref, re_disasm. One JSON object on stdout.
-#include "cli/re_cmds3.h"
+#include "cli/cmds/re_cmds3.h"
 
-#include "cli/re_render.h"
-#include "cli/re_report.h"
+#include "cli/render/re_render.h"
+#include "cli/render/re_report.h"
 
-#include "cli/re_prep.h"
+#include "cli/cmds/re_prep.h"
 
 #include "features/code/re_code.h"
 #include "features/code/re_func.h"
@@ -21,10 +21,10 @@
 #include "utils/json/re_json.h"
 #include "utils/text/re_strbuf.h"
 
-#include "cli/re_cmds3.h"
+#include "cli/cmds/re_cmds3.h"
 
-#include "cli/re_render.h"
-#include "cli/re_report.h"
+#include "cli/render/re_render.h"
+#include "cli/render/re_report.h"
 // The flags a function carries, as names rather than a bitmask, because a caller
 // reading this should not have to know which bit means prologue.
 static void emit_flags(re_jw_t *w, uint32_t flags) {

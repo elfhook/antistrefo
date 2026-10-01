@@ -6,8 +6,8 @@
 
 #include "utils/json/re_jr.h"
 #include "utils/text/re_util.h"
-#include "cli/re_cmds.h"
-#include "cli/re_table.h"
+#include "cli/app/re_table.h"
+#include "cli/cmds/re_cmds.h"
 
 #include <cstdio>
 #include <cstring>

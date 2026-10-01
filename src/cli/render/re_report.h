@@ -20,7 +20,7 @@ extern "C" {
 #include "utils/mem/re_arena.h"
 #include "utils/text/re_strbuf.h"
 #include "utils/tui/re_tui.h"
-#include "cli/re_table.h"
+#include "cli/app/re_table.h"
 
 // A report in progress: the buffer it is written into, the tui state, and the panels
 // the current section is filling.

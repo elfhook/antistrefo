@@ -2,7 +2,7 @@
 // Module: cli (C11).
 // Owns: opening, parsing, and the JSON envelope. Nothing here knows a command.
 // Depends: re_prep.h.
-#include "cli/re_prep.h"
+#include "cli/cmds/re_prep.h"
 
 #include "features/pe/re_format.h"
 #include "utils/text/re_hex.h"

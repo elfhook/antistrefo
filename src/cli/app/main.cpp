@@ -12,9 +12,9 @@
 #endif
 
 #include "utils/text/re_util.h"
-#include "cli/re_cmds.h"
-#include "cli/re_shell.h"
-#include "cli/re_table.h"
+#include "cli/app/re_shell.h"
+#include "cli/app/re_table.h"
+#include "cli/cmds/re_cmds.h"
 #include "mcp/re_mcp.h"
 
 namespace {

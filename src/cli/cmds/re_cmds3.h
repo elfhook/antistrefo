@@ -7,7 +7,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-#include "cli/re_table.h"
+#include "cli/app/re_table.h"
 
 int re_cmd_funcs(re_ctx_t *ctx, const char *path, int argc, char **argv);
 int re_cmd_xrefs(re_ctx_t *ctx, const char *path, int argc, char **argv);

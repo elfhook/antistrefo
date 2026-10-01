@@ -2,13 +2,13 @@
 // Module: cli (C11).
 // Owns: command metadata and the shared flag parsing for every command.
 // Depends: re_table.h and the command entry points. No I/O beyond stdout.
-#include "cli/re_table.h"
+#include "cli/app/re_table.h"
 
-#include "cli/re_cmds3.h"
+#include "cli/cmds/re_cmds3.h"
 
 #include <string.h>
 
-#include "cli/re_cmds.h"
+#include "cli/cmds/re_cmds.h"
 static const re_cmd_t kCommands[] = {
     {"info", "format, architecture, hashes and layout summary", "info <file>", re_cmd_info, true},
     {"triage", "one call ingest view: layout, imports, devices, risk, capabilities",

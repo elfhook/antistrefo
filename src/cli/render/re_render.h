@@ -11,7 +11,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-#include "cli/re_table.h"
+#include "cli/app/re_table.h"
 
 // Every renderer returns a process exit code, like a command, so a caller can return
 // its result directly. Each loads the file itself: the commands already do, and

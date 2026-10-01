@@ -76,16 +76,16 @@ endif()
 
 # ---- antistrefo: one binary, two modes ----
 add_executable(antistrefo
-    src/cli/main.cpp
-    src/cli/re_table.c
-    src/cli/re_cmds.c
-    src/cli/re_cmds2.c
-    src/cli/re_cmds3.c
-src/cli/re_cmds4.c
-src/cli/re_prep.c
-src/cli/re_report.c
-src/cli/re_render.c
-src/cli/re_shell.c
+src/cli/app/main.cpp
+    src/cli/app/re_table.c
+    src/cli/app/re_shell.c
+    src/cli/cmds/re_cmds.c
+    src/cli/cmds/re_cmds2.c
+    src/cli/cmds/re_cmds3.c
+    src/cli/cmds/re_cmds4.c
+    src/cli/cmds/re_prep.c
+    src/cli/render/re_report.c
+    src/cli/render/re_render.c
     src/mcp/re_mcp.cpp)
 target_link_libraries(antistrefo PRIVATE re_core re_flags)
 if(MSVC)

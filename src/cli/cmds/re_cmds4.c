@@ -3,7 +3,7 @@
 // Owns: the decompile command, which renders one function as C-like source.
 // Depends: re_prep, re_decompile, re_dc_walk, re_func, re_stack, re_xref, re_json.
 // Depends: re_decompile, re_dc_walk, re_func, re_stack, re_xref, re_prep.
-#include "cli/re_cmds3.h"
+#include "cli/cmds/re_cmds3.h"
 
 #include "features/code/re_func.h"
 #include "features/code/re_stack.h"
@@ -11,7 +11,7 @@
 #include "features/dec/re_decompile.h"
 #include "utils/json/re_json.h"
 #include "utils/text/re_strbuf.h"
-#include "cli/re_prep.h"
+#include "cli/cmds/re_prep.h"
 
 // The function the command works on: the one containing the address given, or the
 // function at the entry point when no address was given. A function subject is

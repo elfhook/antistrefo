@@ -2,7 +2,7 @@
 // Module: cli (C11).
 // Owns: starting and finishing a report, and the policy that decides whether one is wanted.
 // Depends: re_report.h, re_tui, re_ctx, re_fmt. Writes to stdout only in re_report_end.
-#include "cli/re_report.h"
+#include "cli/render/re_report.h"
 
 #include <stdarg.h>
 #include <stdio.h>

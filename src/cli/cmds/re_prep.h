@@ -18,7 +18,7 @@ extern "C" {
 #include "utils/json/re_json.h"
 #include "utils/mem/re_arena.h"
 #include "utils/text/re_str.h"
-#include "cli/re_table.h"
+#include "cli/app/re_table.h"
 
 #define RE_SCHEMA "antistrefo/1"
 

@@ -13,7 +13,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-#include "cli/re_table.h"
+#include "cli/app/re_table.h"
 
 // True when the shell should run: no arguments, and stdin and stdout are both
 // terminals. A caller that passes arguments never gets here.

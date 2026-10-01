@@ -2,7 +2,7 @@
 // Module: cli (C11).
 // Owns: the text rendering of info, triage, sections, imports and exports.
 // Depends: re_render.h, re_prep, re_report, re_tui, re_pe, re_format, re_features.
-#include "cli/re_render.h"
+#include "cli/render/re_render.h"
 
 #include "features/code/re_func.h"
 #include "features/code/re_stack.h"
@@ -13,8 +13,8 @@
 #include "utils/sys/re_path.h"
 #include "utils/text/re_fmt.h"
 #include "utils/tui/re_tui.h"
-#include "cli/re_prep.h"
-#include "cli/re_report.h"
+#include "cli/cmds/re_prep.h"
+#include "cli/render/re_report.h"
 
 // The subject line: the tool, the file, and the three facts that decide whether to
 // keep reading. This is the row a reader scans first, so it carries format and size

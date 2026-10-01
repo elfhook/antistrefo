@@ -3,7 +3,7 @@
 // Owns: those four commands and their output shapes.
 // Depends: re_cmds.h, re_search, re_rules, re_demangle, re_entropy, re_json.
 
-#include "cli/re_cmds.h"
+#include "cli/cmds/re_cmds.h"
 
 #include <stdio.h>
 

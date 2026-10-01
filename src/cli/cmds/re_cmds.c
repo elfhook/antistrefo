@@ -2,7 +2,7 @@
 // Module: cli (C11).
 // Owns: per command JSON or text output, file loading, and the shared preamble.
 // Depends: re_cmds.h, re_pe, re_format, re_strings, re_triage, re_json, re_text.
-#include "cli/re_cmds.h"
+#include "cli/cmds/re_cmds.h"
 
 #include <stdio.h>
 
@@ -18,8 +18,8 @@
 #include "utils/text/re_hex.h"
 #include "utils/text/re_text.h"
 #include "utils/text/re_util.h"
-#include "cli/re_render.h"
-#include "cli/re_report.h"
+#include "cli/render/re_render.h"
+#include "cli/render/re_report.h"
 
 #define SCHEMA "antistrefo/1"
 
