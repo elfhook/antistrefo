@@ -7,6 +7,7 @@
 //           reached only through the re_disasm_t vtable, so no x86 detail appears.
 #include "features/dec/re_decompile.h"
 
+#include "features/code/re_stack.h"
 #include "features/dec/re_dc_print.h"
 #include "utils/mem/re_vec.h"
 #include "utils/text/re_fmt.h"
@@ -216,12 +217,28 @@ static void emit_op(re_dc_emit_t *e, const re_ir_op_t *op, const re_dc_walk_t *w
 // before written, so the parameter count is that inference, not a guess from the
 // prologue. A frame pointer makes the convention observable in the prologue bytes,
 // and printing it is what tells a reader which ABI to assume.
-static void emit_sig(re_dc_emit_t *e, const re_func_t *f, const re_stack_t *st) {
-    static const char *k_cc[] = {"unknown", "ms64", "sysv"};
-    const char *cc = (st && st->cc < 3) ? k_cc[st->cc] : "unknown";
+//
+// The parameters are named for the registers they arrive in, because that is what the
+// inference actually knows: it knows rcx arrived first, and calling it a0 throws away
+// the one fact a reader can check. Where the convention is unknown there are no
+// parameters to name and the list is empty rather than guessed.
+static void emit_params(re_dc_emit_t *e, const re_stack_t *st) {
     uint32_t nargs = st ? st->n_params : 0;
     if (nargs > RE_CC_MAX_ARGS)
         nargs = RE_CC_MAX_ARGS;
+    re_strbuf_puts(e->o, "(");
+    for (uint32_t i = 0; i < nargs; i++) {
+        if (i)
+            re_strbuf_puts(e->o, ", ");
+        re_strbuf_puts(e->o, "uint64_t ");
+        re_strbuf_puts(e->o, re_cc_arg_reg_name(st->cc, st->arg_regs[i]));
+    }
+    re_strbuf_puts(e->o, ") {\n");
+}
+
+static void emit_sig(re_dc_emit_t *e, const re_func_t *f, const re_stack_t *st) {
+    static const char *k_cc[] = {"unknown", "ms64", "sysv"};
+    const char *cc = (st && st->cc < 3) ? k_cc[st->cc] : "unknown";
     re_strbuf_puts(e->o, "// ");
     re_strbuf_put_hex64(e->o, f->va, 16);
     re_strbuf_puts(e->o, " ");
@@ -230,16 +247,11 @@ static void emit_sig(re_dc_emit_t *e, const re_func_t *f, const re_stack_t *st) 
     if (f->flags & RE_FUNC_THUNK)
         re_strbuf_puts(e->o, "tailcall ");
     re_strbuf_appendf(e->o, "size=0x%llx conv=%s args=%u frame=0x%llx\n",
-                      (unsigned long long)f->size, cc, nargs,
+                      (unsigned long long)f->size, cc, st ? st->n_params : 0,
                       (unsigned long long)(st ? st->frame_size : 0));
     re_strbuf_puts(e->o, "uint64_t sub_");
     re_strbuf_put_hex64(e->o, f->va, 0);
-    re_strbuf_puts(e->o, "(");
-    for (uint32_t i = 0; i < nargs; i++) {
-        re_strbuf_puts(e->o, i ? ", uint64_t a" : "uint64_t a");
-        re_strbuf_put_u64(e->o, i);
-    }
-    re_strbuf_puts(e->o, ") {\n");
+    emit_params(e, st);
 }
 
 // The locals. The stack record holds the distinct displacements the body touched, so

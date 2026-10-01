@@ -53,6 +53,11 @@ void re_stack_analyze(re_code_t *c, const re_func_t *f, re_arena_t *a, re_stack_
 
 // The convention's name, for display.
 const char *re_cc_name(uint8_t cc);
+
+// The register that carries argument number pos (0 based) under this convention, or
+// "?" when there is no such argument or the convention is unknown. Positions are what
+// re_stack_t::arg_regs holds, so this is how a position becomes a register name.
+const char *re_cc_arg_reg_name(uint8_t cc, uint32_t pos);
 #ifdef __cplusplus
 }
 #endif

@@ -230,3 +230,17 @@ const char *re_cc_name(uint8_t cc) {
         return "sysv";
     return "unknown";
 }
+
+// The names are in the internal register numbering the flow walk uses, which is why
+// they are listed rather than derived: kMsArgs above holds positions in that
+// numbering and this is the one place that turns a position into a register name.
+static const char *const kMsNames[4] = {"rcx", "rdx", "r8", "r9"};
+static const char *const kSysvNames[6] = {"rdi", "rsi", "rdx", "rcx", "r8", "r9"};
+
+const char *re_cc_arg_reg_name(uint8_t cc, uint32_t pos) {
+    if (cc == RE_CC_MS64)
+        return pos < 4u ? kMsNames[pos] : "?";
+    if (cc == RE_CC_SYSV)
+        return pos < 6u ? kSysvNames[pos] : "?";
+    return "?";
+}

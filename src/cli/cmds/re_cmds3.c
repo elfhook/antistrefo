@@ -65,6 +65,14 @@ static void emit_func(re_ctx_t *ctx, re_code_t *code, re_jw_t *w, const re_func_
     re_jw_kcstr(w, "cc", re_cc_name(st.cc));
     re_jw_ku64(w, "params", st.n_params);
     re_jw_ku64(w, "locals", st.n_locals);
+    // The registers as well as the count. A count says how many arguments there are;
+    // the names say which ones, which is what makes a recovered signature readable
+    // without cross checking the calling convention by hand.
+    re_jw_key(w, "arg_regs");
+    re_jw_arr(w);
+    for (uint32_t k = 0; k < st.n_params && k < RE_CC_MAX_ARGS; k++)
+        re_jw_cstr(w, re_cc_arg_reg_name(st.cc, st.arg_regs[k]));
+    re_jw_arr_end(w);
     if (st.uses_frame_ptr)
         re_jw_kbool(w, "frame_ptr", true);
     if (st.tail_call)

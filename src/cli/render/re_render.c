@@ -192,9 +192,28 @@ int re_render_imports(re_ctx_t *ctx, const char *path) {
     return 0;
 }
 
+// The argument registers a function was called with, as a comma separated list. This
+// is the column that makes the row useful: "2" says how many arguments there are,
+// "rcx,rdx" says where they came from.
+static const char *arg_names(re_report_t *r, const re_stack_t *st) {
+    re_strbuf_t sb;
+    bool first = true;
+    re_strbuf_init(&sb, r->scratch.arena);
+    for (uint32_t i = 0; i < st->n_params && i < RE_CC_MAX_ARGS; i++) {
+        if (!first)
+            re_strbuf_puts(&sb, ",");
+        first = false;
+        re_strbuf_puts(&sb, re_cc_arg_reg_name(st->cc, st->arg_regs[i]));
+    }
+    if (first)
+        re_strbuf_puts(&sb, "-");
+    return re_report_tmp(r, "%s", sb.p ? sb.p : "-");
+}
+
 // funcs: the command a shell session spends most of its time in, so it gets the widest
-// table and a column for the call convention, which is the fact that makes a recovered
-// function's signature readable. Sizes are human formatted here and exact in the JSON.
+// table and a column for the calling convention, which is the fact that makes a
+// recovered function's signature readable. Sizes are human formatted here and exact in
+// the JSON.
 int re_render_funcs(re_ctx_t *ctx, const char *path) {
     re_file_t f;
     re_pe_t pe;
@@ -204,10 +223,11 @@ int re_render_funcs(re_ctx_t *ctx, const char *path) {
     re_table_t tt;
     re_strbuf_t subj;
     re_strbuf_t sum;
-    static const size_t kWidths[8] = {18, 9, 8, 8, 7, 9, 8, 0};
+    static const size_t kWidths[10] = {15, 6, 6, 5, 4, 4, 6, 9, 6, 0};
     const char *tabs[1] = {"functions"};
-    const char *cols[8] = {"va", "size", "insns", "calls", "edges", "frame", "conv", ""};
-    const char *cells[8];
+    const char *cols[10] = {"va",  "size",  "insns",   "edges", "args",
+                            "loc", "frame", "argregs", "conv",  ""};
+    const char *cells[10];
     size_t shown = 0;
     if (!re_prepare(ctx, path, &f, &pe, &code))
         return re_err_exit_code(ctx->err->code);
@@ -220,7 +240,7 @@ int re_render_funcs(re_ctx_t *ctx, const char *path) {
     re_strbuf_appendf(&sum, "%zu functions  %zu edges", RE_VEC_LEN(&scan.funcs),
                       RE_VEC_LEN(&scan.edges));
     re_report_head(&r, subj.p, sum.p);
-    re_table_begin(&tt, &r, "Recovered functions", kWidths, 8);
+    re_table_begin(&tt, &r, "Recovered functions", kWidths, 10);
     re_table_head(&tt, cols);
     for (size_t i = 0; i < RE_VEC_LEN(&scan.funcs) && shown < ctx->limit; i++, shown++) {
         const re_func_t *fn = RE_VEC_PTR(&scan.funcs, re_func_t, i);
@@ -229,11 +249,13 @@ int re_render_funcs(re_ctx_t *ctx, const char *path) {
         cells[0] = re_report_tmp(&r, "0x%llx", (unsigned long long)fn->va);
         cells[1] = re_report_tmp(&r, "%u", fn->size);
         cells[2] = re_report_tmp(&r, "%u", fn->n_insns);
-        cells[3] = re_report_tmp(&r, "%u", fn->n_calls);
-        cells[4] = re_report_tmp(&r, "%zu", re_func_edge_count(&scan, fn));
-        cells[5] = re_report_tmp(&r, "%u", fn->frame_size);
-        cells[6] = re_cc_name(st.cc);
-        cells[7] = "";
+        cells[3] = re_report_tmp(&r, "%zu", re_func_edge_count(&scan, fn));
+        cells[4] = re_report_tmp(&r, "%u", st.n_params);
+        cells[5] = re_report_tmp(&r, "%u", st.n_locals);
+        cells[6] = re_report_tmp(&r, "%u", st.frame_size);
+        cells[7] = arg_names(&r, &st);
+        cells[8] = re_cc_name(st.cc);
+        cells[9] = "";
         re_table_row(&tt, cells);
     }
     re_table_end(&tt);
