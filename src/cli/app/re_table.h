@@ -42,6 +42,11 @@ typedef struct re_ctx {
     // except the MCP server: it points at a temporary file so the bytes can be
     // handed back as structured content instead of going to the client as text.
     void *stream;
+    // The session's already analysed file, borrowed from whoever opened it. NULL in
+    // every argv invocation, so a command must treat it as an optimisation and not a
+    // requirement: without it the command builds its own. A command may only use it
+    // when an->path matches the file it was asked about.
+    struct re_analysis_s *session;
     re_err_t *err;
 } re_ctx_t;
 

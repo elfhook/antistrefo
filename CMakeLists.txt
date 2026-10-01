@@ -84,9 +84,11 @@ src/cli/app/main.cpp
     src/cli/cmds/re_cmds3.c
     src/cli/cmds/re_cmds4.c
     src/cli/cmds/re_prep.c
+    src/cli/cmds/re_analyze_cmd.c
     src/cli/render/re_report.c
     src/cli/render/re_render.c
     src/cli/render/re_render2.c
+    src/cli/render/re_render3.c
     src/mcp/re_mcp.cpp)
 target_link_libraries(antistrefo PRIVATE re_core re_flags)
 if(MSVC)

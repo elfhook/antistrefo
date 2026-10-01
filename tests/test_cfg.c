@@ -10,8 +10,10 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "features/analysis/re_analyze.h"
 #include "features/code/re_code.h"
 #include "features/code/re_func.h"
+#include "features/code/re_stack.h"
 #include "features/data/re_regions.h"
 #include "features/dec/re_cfg.h"
 #include "features/dec/re_dc_walk.h"
@@ -287,6 +289,69 @@ static void drive_malformed(const uint8_t *bytes, size_t n) {
     re_arena_free(&a);
 }
 
+// The analysis driver, driven through its real entry point. The fixture has to be on
+// disk for that, because re_analysis_open takes a path and that is what a caller has;
+// testing a private entry point instead would pass while the one commands use rotted.
+static void check_analysis(void) {
+    static const char kTmp[] = "re_test_cfg_fixture.sys";
+    uint8_t img[IMG_BYTES];
+    re_arena_t a;
+    re_analysis_t an;
+    FILE *fh;
+    build_pe(img);
+    fh = fopen(kTmp, "wb");
+    RE_CHECK(fh != NULL);
+    if (!fh)
+        return;
+    fwrite(img, 1, sizeof(img), fh);
+    fclose(fh);
+    re_arena_init(&a, 1u << 20);
+    RE_CHECK(re_analysis_open(&an, &a, kTmp));
+    RE_CHECK(an.ok);
+    RE_CHECK(an.has_pe);
+    RE_CHECK(an.has_code);
+    RE_CHECK_EQ_U(RE_VEC_LEN(&an.passes), RE_PASS_COUNT);
+    // Every pass is accounted for, and the ones this file can support did run.
+    for (int i = 0; i < RE_PASS_COUNT; i++) {
+        const re_pass_stat_t *st = re_analysis_pass(&an, (re_pass_t)i);
+        RE_CHECK(st != NULL);
+        if (!st)
+            continue;
+        RE_CHECK_EQ_U(st->pass, (unsigned)i);
+        RE_CHECK(re_analysis_pass_name(st->pass) != NULL);
+    }
+    const re_pass_stat_t *fx = re_analysis_pass(&an, RE_PASS_FUNCS);
+    const re_pass_stat_t *xs = re_analysis_pass(&an, RE_PASS_XREFS);
+    RE_CHECK(fx && fx->ran);
+    RE_CHECK(fx && fx->count > 0);
+    RE_CHECK(xs && xs->ran);
+    RE_CHECK(xs && xs->count > 0);
+    // Exports came from the fixture's export directory, so a driver that lost them
+    // between the PE parse and the report would show here.
+    RE_CHECK_FITS(an.pe.exports, 3);
+    RE_CHECK(re_str_eq_cstr(re_analysis_pass(&an, RE_PASS_FUNCS)->pass == RE_PASS_FUNCS
+                                ? RE_VEC_AT(&an.pe.exports, re_pe_exp_t, 0).name
+                                : re_str(""),
+                            "AlphaFunc"));
+    // The stack accessor has to reach the functions the scan found.
+    re_stack_t st;
+    RE_CHECK(re_analysis_stack_of(&an, 0, &st));
+    re_analysis_close(&an);
+    re_arena_free(&a);
+    remove(kTmp);
+}
+
+// The pass table must have one record per pass, whatever happened. A pass that bailed
+// still has a slot saying so, because a report with eight rows and six real results
+// reads exactly like one where two passes found nothing.
+static void check_pass_records(void) {
+    RE_CHECK_EQ_U(RE_PASS_COUNT, 8);
+    RE_CHECK(re_str_eq_cstr(re_str(re_analysis_pass_name(RE_PASS_FUNCS)), "functions"));
+    // The wording for a skip has to say something actionable, not just "skipped".
+    RE_CHECK(re_str(re_analysis_skip_name(RE_PASS_SKIP_NO_DECODER)).n > 8);
+    RE_CHECK_EQ_U(re_str(re_analysis_skip_name(RE_PASS_RAISED_NONE)).n, 0);
+}
+
 // The region classifier over the same fixture. The one section is executable and
 // holds a decoded function, so it must come back as code; and the window it sits in
 // starts below the first section, so the header region must come back unknown rather
@@ -353,6 +418,8 @@ int main(void) {
     check_walk(&code, &f, &a);
     check_regions(&code, &scan, &pe, &a);
     check_exports(&pe);
+    check_pass_records();
+    check_analysis();
     check_malformed();
     re_arena_free(&a);
     return re_test_report("cfg");

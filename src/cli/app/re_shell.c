@@ -5,6 +5,8 @@
 //           same command table the argv path uses, so this is not a second tool.
 #include "cli/app/re_shell.h"
 
+#include "features/analysis/re_analyze.h"
+#include "utils/mem/re_vec.h"
 #include "utils/text/re_str.h"
 #include "utils/tui/re_tui.h"
 #include "cli/render/re_report.h"
@@ -136,9 +138,49 @@ static void list_commands(re_report_t *r) {
     re_report_end(r);
 }
 
+// The session's analysis of the open file: the file stays mapped, the PE stays
+// parsed, and every pass runs once. IDA's IDB, reduced to what a session needs.
+// Held in its own arena so it survives the per command arena and the per line arena,
+// both of which are reset underneath it.
+typedef struct {
+    re_arena_t arena;
+    re_analysis_t an;
+    bool open;
+} session_t;
+
+static void session_drop(session_t *s) {
+    if (s->open) {
+        re_analysis_close(&s->an);
+        re_arena_free(&s->arena);
+        s->open = false;
+    }
+}
+
+// Opening builds the analysis immediately rather than remembering only the path, so
+// the cost is paid once at open where the user is already waiting for it, and every
+// later command reads the result.
+static bool session_open(session_t *s, re_ctx_t *ctx, const char *path, const char **current,
+                         re_report_t *r) {
+    session_drop(s);
+    re_arena_init(&s->arena, 1u << 22);
+    if (!re_analysis_open(&s->an, &s->arena, path)) {
+        re_arena_free(&s->arena);
+        re_report_note(r, RE_ST_BAD, path);
+        return false;
+    }
+    s->open = true;
+    *current = re_arena_strdup(r->scratch.arena, path);
+    ctx->session = &s->an;
+    char msg[200];
+    snprintf(msg, sizeof(msg), "%s  %zu functions, %zu xrefs, %zu regions", path,
+             RE_VEC_LEN(&s->an.scan.funcs), RE_VEC_LEN(&s->an.xs.fwd), RE_VEC_LEN(&s->an.regions));
+    re_report_note(r, RE_ST_GOOD, msg);
+    return true;
+}
+
 // Run one command from a typed line. The first word is the command; the rest are its
 // arguments, with the file taken from the first bare word or from the remembered one.
-static int run(re_ctx_t *ctx, re_report_t *r, line_t *l, const char **current) {
+static int run(re_ctx_t *ctx, re_report_t *r, line_t *l, const char **current, session_t *s) {
     re_err_t err = {};
     re_str_t word = re_strn(l->argv[0], text_len(l->argv[0]));
     err.code = RE_OK;
@@ -149,6 +191,8 @@ static int run(re_ctx_t *ctx, re_report_t *r, line_t *l, const char **current) {
         return 0;
     }
     if (re_str_eq_cstr(word, "close")) {
+        session_drop(s);
+        ctx->session = NULL;
         *current = NULL;
         return 0;
     }
@@ -163,9 +207,7 @@ static int run(re_ctx_t *ctx, re_report_t *r, line_t *l, const char **current) {
             re_report_note(r, RE_ST_BAD, "open needs a file");
             return 0;
         }
-        *current = re_arena_strdup(r->scratch.arena, l->argv[1]);
-        re_report_note(r, RE_ST_GOOD, l->argv[1]);
-        return 0;
+        return session_open(s, ctx, l->argv[1], current, r) ? 0 : 0;
     }
     const re_cmd_t *cmd = re_cmd_find(l->argv[0]);
     if (!cmd) {
@@ -207,6 +249,8 @@ int re_shell_run(re_ctx_t *ctx) {
     re_arena_t shell;
     re_arena_t words;
     const char *current = NULL;
+    session_t session;
+    session.open = false;
     bool first_prompt = true;
     re_arena_init(&shell, 0);
     re_arena_init(&words, 0);
@@ -237,13 +281,14 @@ int re_shell_run(re_ctx_t *ctx) {
             re_report_note(&r, RE_ST_BAD, "too many arguments on one line");
             continue;
         }
-        int done = run(ctx, &r, &l, &current);
+        int done = run(ctx, &r, &l, &current, &session);
         // The words are released here and not before, because the command was handed
         // pointers into them.
         re_arena_reset(&words);
         if (done)
             break;
     }
+    session_drop(&session);
     re_arena_free(&words);
     re_arena_free(&shell);
     return 0;

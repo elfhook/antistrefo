@@ -8,6 +8,7 @@
 
 #include <string.h>
 
+#include "cli/cmds/re_analyze_cmd.h"
 #include "cli/cmds/re_cmds.h"
 static const re_cmd_t kCommands[] = {
     {"info", "format, architecture, hashes and layout summary", "info <file>", re_cmd_info, true},
@@ -39,6 +40,8 @@ static const re_cmd_t kCommands[] = {
      re_cmd_decompile, true},
     {"regions", "classify each window as code, data, rdata or pad, with evidence", "regions <file>",
      re_cmd_regions, true},
+    {"analyze", "every pass over one file, with per pass timing and what it could not tell",
+     "analyze <file>", re_cmd_analyze, true},
     {"cfg", "control flow graph of one function: blocks, terminators, edges", "cfg <file> [addr]",
      re_cmd_cfg, true},
     {"demangle", "demangle one C++ symbol, no file needed", "demangle <symbol>", re_cmd_demangle,

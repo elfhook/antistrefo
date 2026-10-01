@@ -21,7 +21,7 @@ and the helper will be needed twice or loops over bytes, add it here first.
 | `re_fmt_*` | signed ints, arbitrary base, column padding, byte sizes | `re_fmt.h` |
 | `re_hex_*` | encode, decode with separators, nibble table | `re_hex.h` |
 | `re_entropy_*` | Shannon entropy over a span, for packer detection | `re_entropy.h` |
-| `re_time_*` | Unix timestamp to ISO date and build year | `re_time.h` |
+| `re_time_*` | Unix timestamp to ISO date, build year, and a pass timer | `re_time.h` |
 
 ## Containers
 

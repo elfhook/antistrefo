@@ -1,11 +1,25 @@
 // re_time.h - convert a PE timestamp to a readable date. Triage wants driver age.
 // Module: util (C11).
 // Owns: the civil calendar conversion from days since the epoch, and ISO 8601.
-// Depends: none. No allocation, no globals, proleptic Gregorian, UTC only.
+// Depends: stdio only for the clock, which lives here rather than in a util of its
+//           own because it is the other half of what this header already owns: time.
 #pragma once
 
 #include <stddef.h>
 #include <stdint.h>
+#include <time.h>
+
+// Milliseconds of processor time since an arbitrary origin, for timing one pass
+// against another. clock() rather than a wall clock on purpose: a pass that measures
+// 40ms of work should not report 4 seconds because the machine was suspended, and
+// there is no monotonic wall clock in C11. Zero when the platform has no usable one,
+// which the caller reports as a zero rather than as a fast pass.
+static inline uint64_t re_clock_ms(void) {
+    clock_t c = clock();
+    if (c == (clock_t)-1)
+        return 0;
+    return (uint64_t)(((uint64_t)c * 1000u) / (uint64_t)CLOCKS_PER_SEC);
+}
 
 // Zero padded decimal into a caller buffer. Returns the bytes written, so the
 // caller can advance its cursor. Local on purpose: a date is all this formats.
