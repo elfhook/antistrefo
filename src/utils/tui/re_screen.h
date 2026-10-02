@@ -61,6 +61,10 @@ void re_screen_clear(re_screen_t *s);
 // its own idea of the grid is a widget that draws outside it.
 bool re_screen_inside(const re_screen_t *s, uint16_t y, uint16_t x);
 
+// The control at a cell, or RE_SCREEN_ZONE_NONE. The other half of the zone contract:
+// the id answers what was drawn, this answers what was clicked.
+uint8_t re_screen_zone_at(const re_screen_t *s, uint16_t y, uint16_t x);
+
 // A new clickable control id, or RE_SCREEN_ZONE_NONE past the ceiling. Ids are
 // handed out in drawing order and are stable for a given layout, which is what lets
 // a click be resolved by walking the layout rather than by guessing from coordinates.

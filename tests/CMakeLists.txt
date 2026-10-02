@@ -44,6 +44,19 @@ if(MSVC)
 endif()
 add_test(NAME screen COMMAND re_test_screen)
 
+# The interactive front end's pure half: the event decoder, the focus order, and the
+# frame diff. The platform file is deliberately absent, because a test that needs a
+# terminal is a test that only runs on somebody's machine.
+add_executable(re_test_input test_input.c ${CMAKE_SOURCE_DIR}/src/cli/screen/re_input.c
+    ${CMAKE_SOURCE_DIR}/src/cli/screen/re_focus.c ${CMAKE_SOURCE_DIR}/src/cli/screen/re_draw.c)
+target_link_libraries(re_test_input PRIVATE re_core re_utils re_flags)
+if(MSVC)
+    set_property(TARGET re_test_input
+        PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    target_compile_definitions(re_test_input PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+add_test(NAME input COMMAND re_test_input)
+
 # The command layer lives in the executable, so testing it means running it. This is
 # the only automated coverage a command gets, and without it a command that silently
 # answers "nothing references this" passes every other suite.

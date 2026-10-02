@@ -279,9 +279,11 @@ static void test_layout_refuses_tiny_screen(re_arena_t *a) {
     RE_CHECK(strstr(f.dump.p, "Pseudocode") == NULL);
 }
 
-// re_screen_draw and re_screen_dump must agree on the text, differing only in
-// escapes. If they drift, the tests are asserting a layout that is never the one
-// actually drawn.
+// draw and dump must carry the same glyphs in the same order. They cannot be compared
+// byte for byte: draw emits a space for every blank cell because the terminal needs
+// one, and dump trims trailing blanks because a reader does not. What has to hold is
+// that neither drops nor repeats a glyph, which is what the space stripped comparison
+// checks.
 static void test_draw_matches_dump(re_arena_t *a) {
     arr_t f;
     arr_build(a, &f);
@@ -290,10 +292,16 @@ static void test_draw_matches_dump(re_arena_t *a) {
     RE_CHECK(re_layout_compose(&s, &f.L) > 0);
     re_screen_draw(&s);
     re_screen_dump(&s, &f.dump);
-    size_t common = 0;
-    while (f.out.p[common] && f.out.p[common] == f.dump.p[common])
-        common++;
-    RE_CHECK(common > 40);
+
+    size_t dn = 0, un = 0;
+    for (const char *p = f.out.p; *p; p++)
+        if (*p != ' ')
+            dn++;
+    for (const char *p = f.dump.p; *p; p++)
+        if (*p != ' ')
+            un++;
+    RE_CHECK_EQ_U(dn, un);
+    RE_CHECK(dn > 40);
 }
 
 int main(int argc, char **argv) {

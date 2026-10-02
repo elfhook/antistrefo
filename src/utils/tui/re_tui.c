@@ -26,6 +26,13 @@
 // The style escapes, one table so no caller writes one. Each style resets to default
 // at the end, which is what keeps a styled fragment from colouring whatever comes
 // after it if the output is concatenated somewhere unexpected.
+// The ceilings and the fallback for a caller that has no terminal to ask. Same
+// numbers as the grid's own limits so a size read here can always be used as one.
+#define TERM_H_MAX 200
+#define TERM_H_DEFAULT 24
+
+uint16_t re_tui_term_width(void);
+
 typedef struct {
     const char *on;
     const char *off;
@@ -74,6 +81,42 @@ static int console_width(void) {
     return 0;
 }
 #endif
+
+static int console_height(void) {
+#if defined(_WIN32)
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (h == INVALID_HANDLE_VALUE || !GetConsoleScreenBufferInfo(h, &csbi))
+        return 0;
+    int r = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+    return r > 0 ? r : 0;
+#else
+    return 0;
+#endif
+}
+
+void re_tui_term_size(uint16_t *rows, uint16_t *cols) {
+    uint16_t w = re_tui_term_width();
+    int h = console_height();
+#if !defined(_WIN32)
+    if (h <= 0) {
+        struct winsize ws;
+        for (int fd = 1; fd <= 2; fd++) {
+            if (ioctl(fd, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0) {
+                h = (int)ws.ws_row;
+                if ((int)w < RE_TUI_MIN_WIDTH && (int)ws.ws_col >= RE_TUI_MIN_WIDTH)
+                    w = ws.ws_col > 200 ? (uint16_t)200 : (uint16_t)ws.ws_col;
+                break;
+            }
+        }
+    }
+#endif
+    if (rows)
+        *rows = h > 0 ? (h > TERM_H_MAX ? (uint16_t)TERM_H_MAX : (uint16_t)h)
+                      : (uint16_t)TERM_H_DEFAULT;
+    if (cols)
+        *cols = w;
+}
 
 uint16_t re_tui_term_width(void) {
     // A real console answers for itself, and it is the only source that follows a

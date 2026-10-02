@@ -68,6 +68,12 @@ bool re_tui_stdin_tty(void);
 // environment rather than an ioctl, so this stays portable and testable.
 uint16_t re_tui_term_width(void);
 
+// Both dimensions from the terminal itself, which is the only source that follows a
+// resize. Falls back to 80x24 when there is no terminal to ask, so a caller always gets
+// a usable pair and never has to invent one. A full screen needs both, and there
+// is no honest way to derive one from the other.
+void re_tui_term_size(uint16_t *rows, uint16_t *cols);
+
 // Whether colour is wanted: the caller passes what it decided, and this only
 // resolves the NO_COLOR convention, which is a near universal expectation.
 bool re_tui_want_color(void);

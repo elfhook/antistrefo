@@ -95,10 +95,24 @@ uint16_t re_screen_put_run(re_screen_t *s, uint16_t y, uint16_t x, uint16_t limi
     return cx;
 }
 
+uint8_t re_screen_zone_at(const re_screen_t *s, uint16_t y, uint16_t x) {
+    if (!re_screen_inside(s, y, x))
+        return RE_SCREEN_ZONE_NONE;
+    return s->cell[(size_t)y * s->cols + x].zone;
+}
+
 void re_screen_clear(re_screen_t *s) {
-    if (s->cell)
-        for (size_t i = 0, n = (size_t)s->rows * s->cols; i < n; i++)
-            s->cell[i].g[0] = '\0';
+    if (!s->cell)
+        return;
+    // Every field, not just the glyph. A cell left with the width of the glyph that
+    // used to be there is indistinguishable from the right half of a double width
+    // glyph, and a renderer that skips those writes nothing at all for a cleared row.
+    for (size_t i = 0, n = (size_t)s->rows * s->cols; i < n; i++) {
+        s->cell[i].g[0] = '\0';
+        s->cell[i].cols = 1;
+        s->cell[i].style = (uint8_t)RE_ST_NONE;
+        s->cell[i].zone = RE_SCREEN_ZONE_NONE;
+    }
 }
 
 uint8_t re_screen_zone(re_screen_t *s) {
