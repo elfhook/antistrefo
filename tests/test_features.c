@@ -4,10 +4,14 @@
 // Depends: re_core and re_utils. Prints to stdout, which is fine for a test binary.
 #include "features/data/re_search.h"
 #include "features/lib/re_demangle.h"
+#include "features/lib/re_flirt.h"
 #include "utils/sys/re_entropy.h"
 #include "utils/sys/re_time.h"
 #include "utils/text/re_util.h"
 #include "re_test.h"
+
+#include <stdio.h>
+#include <string.h>
 
 static void test_time(void) {
     char buf[24];
@@ -277,10 +281,66 @@ static void test_entropy(void) {
     RE_CHECK_EQ_U((uint64_t)re_entropy(re_span_none()), 0);
 }
 
+// The signature file is the only route to naming a library function, so the loader
+// is pinned on its whole surface: the documented spacing, wildcards, slack, and the
+// lines that must be refused. The spacing case is the one that was broken. A pattern
+// written as " 488bc453" is not a hex pair, so every signature in a valid file loaded,
+// was counted, and matched nothing - which reads as "the tool does not work" rather
+// than as a parser bug.
+static void test_flirt(void) {
+    re_arena_t a;
+    re_vec_t sigs;
+    re_arena_init(&a, 65536);
+    re_vec_init(&sigs, sizeof(re_sig_t));
+    re_vec_clear(&sigs);
+    RE_CHECK_EQ_U(re_flirt_builtin(&a, &sigs), 3);
+    const char *path = "re_flirt_probe.sig";
+    FILE *fh = fopen(path, "wb");
+    RE_CHECK(fh != NULL);
+    if (!fh) {
+        re_arena_free(&a);
+        return;
+    }
+    const char *body = "Spaced : mod : 488bc453\n"
+                       "Tight:mod:488bc453\n"
+                       "Wild : mod : 488b????\n"
+                       "Slack : mod : 488bc453 : 4\n"
+                       "# a comment\n"
+                       "\n"
+                       "NoColons\n"
+                       "BadHex : mod : 488g\n"
+                       "OddLen : mod : 488\n"
+                       "EmptyName : mod :\n"
+                       "TooMuchSlack : mod : 488bc453 : 9\n";
+    fwrite(body, 1, strlen(body), fh);
+    fclose(fh);
+    size_t added = re_flirt_load(&a, path, &sigs);
+    // Four accepted: spaced, tight, wildcarded and slack.
+    RE_CHECK_EQ_U(added, 4);
+    // The built in idioms must survive loading a file. They used to be cleared, so
+    // asking for a signature file silently cost the three built in patterns.
+    RE_CHECK_EQ_U(RE_VEC_LEN(&sigs), 7);
+    const re_sig_t *s = RE_VEC_PTR(&sigs, re_sig_t, 3);
+    RE_CHECK(re_str_eq_cstr(s->name, "Spaced"));
+    RE_CHECK(re_str_eq_cstr(s->module, "mod"));
+    RE_CHECK(re_str_eq_cstr(s->pattern, "488bc453"));
+    RE_CHECK_EQ_U(s->slack, 0);
+    RE_CHECK(re_str_eq_cstr(RE_VEC_PTR(&sigs, re_sig_t, 4)->name, "Tight"));
+    RE_CHECK(re_str_eq_cstr(RE_VEC_PTR(&sigs, re_sig_t, 5)->pattern, "488b????"));
+    // Slack was documented, never parsed, and the matcher never looked at it.
+    RE_CHECK_EQ_U(RE_VEC_PTR(&sigs, re_sig_t, 6)->slack, 4);
+    // A path that is not there adds nothing and takes nothing away.
+    RE_CHECK_EQ_U(re_flirt_load(&a, "re_flirt_absent.sig", &sigs), 0);
+    RE_CHECK_EQ_U(RE_VEC_LEN(&sigs), 7);
+    remove(path);
+    re_arena_free(&a);
+}
+
 int re_test_features(void) {
     test_time();
     test_search();
     test_demangle();
     test_entropy();
+    test_flirt();
     return 0;
 }

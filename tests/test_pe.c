@@ -11,6 +11,7 @@
 
 #include "features/code/re_code.h"
 #include "features/code/re_func.h"
+#include "features/lib/re_flirt.h"
 #include "features/meta/re_disasm.h"
 #include "features/pe/re_pe.h"
 #include "utils/mem/re_arena.h"
@@ -146,6 +147,37 @@ static void check_no_split_inside_unwind(re_code_t *code, const re_fscan_t *scan
     RE_CHECK_EQ_U(starts, 1);
 }
 
+// Slack is a claim about the pattern: the last n bytes are ones the signature makes
+// no statement about. Parsing it is not the same as honouring it, and for a while the
+// field was filled in and then never read by the matcher, so a signature written with
+// slack was compared in full. That is the difference between a pattern covering a
+// prologue with an unknown stack adjustment and a pattern that never matches.
+static void check_slack_matching(re_code_t *code) {
+    re_sig_t s;
+    s.module = re_str("");
+    // The first three bytes of .text, which are 48 83 f8. The fourth is 01 here.
+    s.pattern = re_str("4883f8");
+    s.name = re_str("exact");
+    s.slack = 0;
+    RE_CHECK(re_sig_match(code, code->base + TEXT_RVA, &s));
+    // Same pattern with the last byte wrong and one byte of slack: the wrong byte is
+    // exactly the one slack excuses, so this must match.
+    s.pattern = re_str("4883f8ff");
+    s.slack = 1;
+    RE_CHECK(re_sig_match(code, code->base + TEXT_RVA, &s));
+    // And without the slack the same pattern must not match, or slack means nothing.
+    s.slack = 0;
+    RE_CHECK(!re_sig_match(code, code->base + TEXT_RVA, &s));
+    // A wrong byte that slack does not reach is still a miss.
+    s.pattern = re_str("fffff8");
+    s.slack = 1;
+    RE_CHECK(!re_sig_match(code, code->base + TEXT_RVA, &s));
+    // Slack covering the whole pattern claims nothing at all, so it names nothing.
+    s.pattern = re_str("4883f8");
+    s.slack = 3;
+    RE_CHECK(!re_sig_match(code, code->base + TEXT_RVA, &s));
+}
+
 int main(void) {
     uint8_t img[IMG_BYTES];
     re_arena_t a;
@@ -169,6 +201,7 @@ int main(void) {
             re_func_scan(&code, &a2, &scan);
             check_unwind_bounds_function(&code, &scan);
             check_no_split_inside_unwind(&code, &scan);
+            check_slack_matching(&code);
         }
         re_arena_free(&a2);
     }

@@ -45,9 +45,14 @@ bool re_flirt_name(const re_code_t *c, const re_func_t *f, const re_vec_t *sigs,
 // one here would put confident wrong names into the report.
 size_t re_flirt_builtin(re_arena_t *a, re_vec_t *out);
 
-// Load a signature file. One signature per line: name : module : hex pattern, with
-// # starting a comment. Blank lines are skipped. Returns the number loaded, which
-// is zero when the file cannot be read rather than an error to guess around.
+// Load a signature file. One signature per line:
+//   name : module : hex pattern : slack
+// with the slack field optional and # starting a comment. Hex digits match exactly,
+// ?? skips a byte, and slack is how many trailing bytes the pattern makes no claim
+// about. Returns the number loaded, which is zero when the file cannot be read
+// rather than an error to guess around. A line whose pattern is not well formed hex
+// is refused rather than counted, so the number reported is the number that can
+// actually match something.
 size_t re_flirt_load(re_arena_t *a, const char *path, re_vec_t *out);
 #ifdef __cplusplus
 }

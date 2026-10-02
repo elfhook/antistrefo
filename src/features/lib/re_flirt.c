@@ -31,11 +31,16 @@ bool re_sig_match(const re_code_t *c, uint64_t va, const re_sig_t *sig) {
     re_span_t b;
     size_t i = 0;
     size_t n = (size_t)sig->pattern.n / 2u;
-    if (n == 0 || n > RE_SIG_MAX)
+    // Slack is how many trailing bytes the pattern makes no claim about. The field
+    // existed and the matcher never looked at it, so a signature written with slack
+    // either matched too little or, if slack were ever honoured elsewhere, would
+    // claim a weaker match than it reports.
+    size_t cmp = (size_t)sig->slack < n ? n - (size_t)sig->slack : 0u;
+    if (cmp == 0 || cmp > RE_SIG_MAX)
         return false;
-    if (!re_code_at(c, va, &b) || b.n < n)
+    if (!re_code_at(c, va, &b) || b.n < cmp)
         return false;
-    while (i < n) {
+    while (i < cmp) {
         int want = sig_byte(sig->pattern.p[i * 2], sig->pattern.p[i * 2 + 1]);
         if (want == -2)
             return false;
@@ -64,6 +69,16 @@ static const char *const kBuiltIn[] = {
 // pattern pointing at unmapped memory. Returns false for a comment, a blank line,
 // or a line without both separators, so a malformed entry is skipped rather than
 // half loaded.
+// The documented line puts a space either side of each colon, so every field is
+// trimmed. Without this the pattern arrives as " 488bc453": the leading space is not
+// a hex pair, sig_byte calls it malformed, and every signature in a perfectly valid
+// file loads, is counted in the output, and matches nothing at all.
+static re_str_t field(re_arena_t *a, const char *p, size_t n) {
+    re_str_t s = re_strn(p, n);
+    s = re_str_trim(s);
+    return re_strn(re_arena_strndup(a, s.p, s.n), s.n);
+}
+
 static bool split_line(re_arena_t *a, re_str_t line, re_sig_t *out) {
     re_str_t t = re_str_trim(line);
     long sep1 = re_str_find_cstr(t, ":", 0);
@@ -73,11 +88,40 @@ static bool split_line(re_arena_t *a, re_str_t line, re_sig_t *out) {
     sep2 = re_str_find_cstr(t, ":", (size_t)sep1 + 1u);
     if (sep2 < 0)
         return false;
-    out->name = re_str(re_arena_strndup(a, t.p, (size_t)sep1));
-    out->module = re_str(re_arena_strndup(a, t.p + sep1 + 1, (size_t)(sep2 - sep1 - 1)));
-    out->pattern = re_str(re_arena_strndup(a, t.p + sep2 + 1, t.n - (size_t)sep2 - 1u));
+    // An optional fourth field is how many trailing bytes are allowed to differ,
+    // which is what lets one pattern cover a prologue ending in a stack adjustment of
+    // a size the caller does not know. It was documented and never read.
+    long sep3 = re_str_find_cstr(t, ":", (size_t)sep2 + 1u);
+    size_t pend = sep3 < 0 ? t.n : (size_t)sep3;
+    out->name = field(a, t.p, (size_t)sep1);
+    out->module = field(a, t.p + sep1 + 1, (size_t)(sep2 - sep1 - 1));
+    out->pattern = field(a, t.p + sep2 + 1, pend - (size_t)sep2 - 1u);
     out->slack = 0;
-    return out->pattern.n >= 2;
+    if (out->name.n == 0)
+        return false;
+    // Refuse a pattern that could never match. Counting it would report a signature
+    // that cannot do anything, which is how a file that does nothing looks loaded.
+    if (out->pattern.n < 2u || (out->pattern.n & 1u) != 0u)
+        return false;
+    for (size_t i = 0; i < out->pattern.n; i += 2u) {
+        if (sig_byte(out->pattern.p[i], out->pattern.p[i + 1]) == -2)
+            return false;
+    }
+    if (sep3 >= 0) {
+        re_str_t sv = field(a, t.p + sep3 + 1, t.n - (size_t)sep3 - 1u);
+        if (sv.n == 0 || sv.n > 3u)
+            return false;
+        unsigned v = 0;
+        for (size_t i = 0; i < sv.n; i++) {
+            if (sv.p[i] < '0' || sv.p[i] > '9')
+                return false;
+            v = v * 10u + (unsigned)(sv.p[i] - '0');
+        }
+        if (v > out->pattern.n / 2u)
+            return false; // more slack than there are bytes to skip is meaningless
+        out->slack = (uint8_t)v;
+    }
+    return true;
 }
 
 size_t re_flirt_builtin(re_arena_t *a, re_vec_t *out) {
@@ -99,17 +143,21 @@ static re_str_t line_at(re_span_t f, uint64_t off) {
     return re_strn((const char *)f.p + off, (size_t)(end - off));
 }
 
+// Appends rather than replacing. The caller loads the built in idioms first and then
+// a file, and clearing here threw the idioms away: asking for a signature file
+// silently cost the three built in patterns, which is the kind of loss that looks
+// like the file having no effect rather than like a bug.
 size_t re_flirt_load(re_arena_t *a, const char *path, re_vec_t *out) {
     re_file_t f;
     uint64_t off = 0;
-    re_vec_clear(out);
+    size_t added = 0;
     if (re_file_open(path, a, &f) != RE_OK)
         return 0;
     while (off < f.whole.n) {
         re_str_t line = line_at(f.whole, off);
         re_sig_t s;
         if (split_line(a, line, &s))
-            RE_VEC_PUSH(out, a, s);
+            added += RE_VEC_PUSH(out, a, s) ? 1u : 0u;
         off += line.n;
         // Step over the terminator, treating CRLF as one break.
         if (off < f.whole.n && f.whole.p[off] == '\r')
@@ -118,7 +166,7 @@ size_t re_flirt_load(re_arena_t *a, const char *path, re_vec_t *out) {
             off++;
     }
     re_file_close(&f);
-    return RE_VEC_LEN(out);
+    return added;
 }
 
 bool re_flirt_name(const re_code_t *c, const re_func_t *f, const re_vec_t *sigs, re_str_t *name,
