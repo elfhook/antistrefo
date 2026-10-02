@@ -270,6 +270,18 @@ static void adopt_unwind(const re_pe_t *pe, re_vec_t *funcs) {
     }
 }
 
+// How many transfers leave each function. One pass over the edges, with the owning
+// function found by binary search, because the caller needs this for every function
+// and asking the edge list per function made emitting a large file quadratic.
+static void count_edges(re_fscan_t *s) {
+    for (size_t i = 0; i < RE_VEC_LEN(&s->edges); i++) {
+        const re_edge_t *e = RE_VEC_PTR(&s->edges, re_edge_t, i);
+        long f = re_func_index_of(s, e->from);
+        if (f >= 0)
+            RE_VEC_PTR(&s->funcs, re_func_t, (size_t)f)->out_edges++;
+    }
+}
+
 void re_func_scan(re_code_t *c, re_arena_t *a, re_fscan_t *out) {
     re_vec_t queue;
     walk_t w;
@@ -305,6 +317,7 @@ void re_func_scan(re_code_t *c, re_arena_t *a, re_fscan_t *out) {
     sweep(&w);
     adopt_unwind(c->pe, &out->funcs);
     re_vec_sort(&out->funcs, cmp_va, NULL);
+    count_edges(out);
 }
 
 const re_func_t *re_func_at(const re_fscan_t *s, size_t index) {
@@ -330,14 +343,13 @@ long re_func_index_of(const re_fscan_t *s, uint64_t va) {
     return -1;
 }
 
-// How many transfers leave this function. Scoped to the function's own address
-// range, because an edge belongs to whichever function contains its source.
+// How many transfers leave this function. The count was taken when the scan
+// finished, because a caller wants one per function and scanning the whole edge list
+// per function made emitting a large file quadratic. The lookup is by address rather
+// than by pointer, because callers hold a copy of the record, not the stored one.
 size_t re_func_edge_count(const re_fscan_t *s, const re_func_t *f) {
-    size_t n = 0;
-    for (size_t i = 0; i < RE_VEC_LEN(&s->edges); i++) {
-        const re_edge_t *e = RE_VEC_PTR(&s->edges, re_edge_t, i);
-        if (e->from >= f->va && e->from < f->va + f->size)
-            n++;
-    }
-    return n;
+    long i = re_func_index_of(s, f->va);
+    if (i < 0)
+        return 0;
+    return re_func_at(s, (size_t)i)->out_edges;
 }

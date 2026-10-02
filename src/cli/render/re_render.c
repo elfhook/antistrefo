@@ -214,6 +214,61 @@ static const char *arg_names(re_report_t *r, const re_stack_t *st) {
 // table and a column for the calling convention, which is the fact that makes a
 // recovered function's signature readable. Sizes are human formatted here and exact in
 // the JSON.
+// Not every export is a function, and a table that says nothing about which is which
+// invites calling a GPU preference dword. The kind column is the whole point, so it
+// comes before the address, and a forwarder names its module rather than pretending
+// to have code here.
+int re_render_exports(re_ctx_t *ctx, const char *path) {
+    re_file_t f;
+    re_pe_t pe;
+    re_code_t code;
+    re_report_t r;
+    re_table_t tt;
+    re_strbuf_t subj;
+    re_strbuf_t sum;
+    static const size_t kWidths[5] = {10, 10, 28, 8, 0};
+    const char *tabs[1] = {"exports"};
+    const char *cols[5] = {"kind", "rva", "name", "section", "forwards to"};
+    const char *cells[5];
+    size_t shown = 0, fwd = 0, data = 0;
+    if (!re_prepare(ctx, path, &f, &pe, &code))
+        return re_err_exit_code(ctx->err->code);
+    re_report_open(&r, ctx->arena, ctx, tabs, 1);
+    re_strbuf_init(&subj, ctx->arena);
+    re_strbuf_init(&sum, ctx->arena);
+    for (size_t i = 0; i < RE_VEC_LEN(&pe.exports); i++) {
+        const re_pe_exp_t *x = RE_VEC_PTR(&pe.exports, re_pe_exp_t, i);
+        re_str_t f2 = re_pe_export_forwarder(&pe, x->rva);
+        if (f2.n)
+            fwd++;
+        else if (!re_str_eq_cstr(re_str(re_pe_region_kind(re_pe_section_at_rva(&pe, x->rva))),
+                                 "code"))
+            data++;
+    }
+    re_strbuf_puts(&subj, "exports ");
+    re_strbuf_puts(&subj, re_path_basename_ptr(path));
+    re_strbuf_appendf(&sum, "%zu exports  %zu forward  %zu not code", RE_VEC_LEN(&pe.exports), fwd,
+                      data);
+    re_report_head(&r, subj.p, sum.p);
+    re_table_begin(&tt, &r, "Exported symbols", kWidths, 5);
+    re_table_head(&tt, cols);
+    for (size_t i = 0; i < RE_VEC_LEN(&pe.exports) && shown < ctx->limit; i++, shown++) {
+        const re_pe_exp_t *x = RE_VEC_PTR(&pe.exports, re_pe_exp_t, i);
+        const re_pe_section_t *sec = re_pe_section_at_rva(&pe, x->rva);
+        re_str_t f2 = re_pe_export_forwarder(&pe, x->rva);
+        cells[0] = f2.n ? "forwarder" : re_pe_region_kind(sec);
+        cells[1] = re_report_tmp(&r, "0x%08x", x->rva);
+        cells[2] = x->name.p ? x->name.p : "?";
+        cells[3] = sec ? sec->name : "";
+        cells[4] = f2.n ? f2.p : "";
+        re_table_row(&tt, cells);
+    }
+    re_table_end(&tt);
+    re_report_end(&r);
+    re_file_close(&f);
+    return 0;
+}
+
 int re_render_funcs(re_ctx_t *ctx, const char *path) {
     re_file_t f;
     re_pe_t pe;

@@ -18,7 +18,6 @@ extern "C" {
 // sharing the loaded record across both would mean holding a mapped file open for the
 // sake of a format that is usually not the one being used.
 int re_render_info(re_ctx_t *ctx, const char *path);
-int re_render_triage(re_ctx_t *ctx, const char *path);
 int re_render_sections(re_ctx_t *ctx, const char *path);
 int re_render_imports(re_ctx_t *ctx, const char *path);
 int re_render_exports(re_ctx_t *ctx, const char *path);

@@ -58,7 +58,8 @@ typedef struct {
     uint32_t n_calls;
     uint32_t n_jumps;
     uint32_t flags;
-    re_str_t name; // from exports or FLIRT, empty otherwise
+    uint32_t out_edges; // transfers leaving this function, counted once after the scan
+    re_str_t name;      // from exports or FLIRT, empty otherwise
 } re_func_t;
 
 typedef struct {

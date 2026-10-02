@@ -287,10 +287,15 @@ size_t re_xref_func_strings(const re_xrefset_t *s, const re_func_t *f, re_arena_
                             re_vec_t *out) {
     uint64_t last = 0;
     re_vec_clear(out);
-    for (size_t i = 0; i < RE_VEC_LEN(&s->fwd); i++) {
+    // Same range query as the two below, so it starts where the function starts and
+    // stops at its end. Scanning every reference in the binary once per function made
+    // emitting a large file quadratic: 200 functions took 9 seconds, and the largest
+    // file in the corpus would have taken twenty minutes.
+    size_t i = lower_fwd(s, f->va);
+    for (; i < RE_VEC_LEN(&s->fwd); i++) {
         const re_xref_t *r = RE_VEC_PTR(&s->fwd, re_xref_t, i);
-        if (r->from < f->va || r->from >= f->va + f->size)
-            continue;
+        if (r->from >= f->va + f->size)
+            break;
         if (!(r->flags & RE_XRF_STRING) || r->to == last)
             continue;
         last = r->to;

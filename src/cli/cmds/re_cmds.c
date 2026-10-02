@@ -282,8 +282,9 @@ int re_cmd_imports(re_ctx_t *ctx, const char *path, int argc, char **argv) {
 }
 
 int re_cmd_exports(re_ctx_t *ctx, const char *path, int argc, char **argv) {
-    (void)argc;
-    (void)argv;
+    if (re_report_wanted(ctx))
+        return re_render_exports(ctx, path);
+    (void)argc, (void)argv;
     re_loaded_t l;
     re_err_code_t e = load(&l, ctx, path, true, false);
     if (e != RE_OK) {
