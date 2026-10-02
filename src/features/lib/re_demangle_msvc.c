@@ -367,6 +367,25 @@ static void mv_signature(mv_t *s, const re_vec_t *types) {
     mv_puts(s, ")");
 }
 
+// Everything after the calling convention, and it must consume the whole rest of
+// the name. A leftover is how a wrong reading of an ambiguous code announces
+// itself: otherwise it stops at the first answer that looked plausible.
+static bool parse_rest(re_arena_t *a, mv_t *s, const char *cc) {
+    re_vec_t types;
+    re_vec_init(&types, sizeof(re_str_t));
+    mv_collect_types(s, a, &types);
+    if (!s->ok)
+        return false;
+    mv_signature(s, &types);
+    if (cc[0] != 0 && !re_str_eq_cstr(re_str(cc), "__cdecl")) {
+        mv_puts(s, " ");
+        mv_puts(s, cc);
+    }
+    while (s->p < s->end && (*s->p == 'Z' || *s->p == '@'))
+        s->p++;
+    return s->p == s->end;
+}
+
 bool re_demangle_msvc(re_arena_t *a, const char *sym, size_t n, re_str_t *out) {
     mv_t s;
     s.p = sym;
@@ -383,28 +402,26 @@ bool re_demangle_msvc(re_arena_t *a, const char *sym, size_t n, re_str_t *out) {
     mv_name(&s);
     if (!s.ok || s.p >= s.end)
         return false;
-    const char *cc = callconv(&s);
-    if (!cc)
-        return false;
-    re_vec_t types;
-    re_vec_init(&types, sizeof(re_str_t));
-    mv_collect_types(&s, a, &types);
-    if (!s.ok)
-        return false;
-    mv_signature(&s, &types);
-    if (cc[0] != '\0' && !re_str_eq_cstr(re_str(cc), "__cdecl")) {
-        // Only a non default convention is worth reporting, and it goes after
-        // the signature so the name reads as a normal C declaration.
-        mv_puts(&s, " ");
-        mv_puts(&s, cc);
+    // YAA is two different things: a three letter calling convention, or the two
+    // letter YA followed by A, which opens a reference to the return type. Nothing
+    // in the name says which, so every candidate is tried and only one that
+    // consumes the whole signature is accepted. Committing to the first match
+    // produced a signature that read correctly and was wrong; committing to the
+    // last produced nothing at all.
+    const char *resume = s.p;
+    for (size_t i = 0; i < sizeof(kCallConv) / sizeof(kCallConv[0]); i++) {
+        size_t mark = s.out.len;
+        if (take(&s, kCallConv[i].code) && parse_rest(a, &s, kCallConv[i].name)) {
+            char *text = re_strbuf_detach(&s.out);
+            if (text && re_str(text).n) {
+                *out = re_str(text);
+                return true;
+            }
+            break;
+        }
+        s.p = resume;
+        s.out.len = mark;
+        s.ok = true;
     }
-    while (s.p < s.end && (*s.p == 'Z' || *s.p == '@'))
-        s.p++;
-    if (s.p != s.end)
-        return false;
-    char *text = re_strbuf_detach(&s.out);
-    if (!text || re_str(text).n == 0)
-        return false;
-    *out = re_str(text);
-    return true;
+    return false;
 }

@@ -224,6 +224,8 @@ static void test_search(void) {
     re_arena_free(&a);
 }
 
+static void test_demangle_msvc(void);
+
 static void test_demangle(void) {
     re_arena_t a;
     re_arena_init(&a, 0);
@@ -264,6 +266,37 @@ static void test_demangle(void) {
     RE_CHECK(re_demangle_msvc(&a, "?f@@YAHH@Z", strlen("?f@@YAHH@Z"), &out));
     RE_CHECK(strcmp(out.p, "f(int)") == 0);
 #undef DEMANGLE
+    re_arena_free(&a);
+    test_demangle_msvc();
+}
+
+// YAA is a three letter calling convention or the two letter YA followed by A, which
+// opens a reference to the return type, and nothing in the name says which. The first
+// reading was committed to, so these two either came out with a signature that read
+// correctly and was wrong, or came out as nothing at all. Both symbols are real
+// exports of a shipped binary, so this is not a synthetic case.
+static void test_demangle_msvc(void) {
+    re_arena_t a;
+    re_str_t out;
+    re_arena_init(&a, 0);
+    static const char *const kAmb[] = {
+        "?generic_category@system@boost@@YAAEBVerror_category@12@XZ",
+        "?system_category@system@boost@@YAAEBVerror_category@12@XZ",
+    };
+    static const char *const kWant[] = {"boost::system::generic_category()",
+                                        "boost::system::system_category()"};
+    for (size_t i = 0; i < 2; i++) {
+        RE_CHECK(re_demangle_msvc(&a, kAmb[i], strlen(kAmb[i]), &out));
+        RE_CHECK_EQ_STR(out.p, kWant[i]);
+        // And again, because the reading that succeeds is chosen by trying, and the
+        // ones before it have already written into the buffer this reuses.
+        RE_CHECK(re_demangle_msvc(&a, kAmb[i], strlen(kAmb[i]), &out));
+        RE_CHECK_EQ_STR(out.p, kWant[i]);
+    }
+    // Where the first convention candidate consumes the whole name it still wins, so
+    // the backtracking did not simply come to prefer the longer code.
+    RE_CHECK(re_demangle_msvc(&a, "?func@@YAXXZ", 12, &out));
+    RE_CHECK_EQ_STR(out.p, "func()");
     re_arena_free(&a);
 }
 
