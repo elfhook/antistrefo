@@ -83,6 +83,7 @@ src/cli/app/main.cpp
     src/cli/cmds/re_cmds2.c
     src/cli/cmds/re_cmds3.c
     src/cli/cmds/re_cmds4.c
+    src/cli/cmds/re_cmds5.c
     src/cli/cmds/re_prep.c
     src/cli/cmds/re_analyze_cmd.c
     src/cli/render/re_report.c

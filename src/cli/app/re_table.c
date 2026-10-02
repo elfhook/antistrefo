@@ -22,6 +22,8 @@ static const re_cmd_t kCommands[] = {
      true},
     {"strings", "printable strings, ascii and utf-16, with a regex filter",
      "strings <file> [--regex R]", re_cmd_strings, true},
+    {"vtables", "C++ class tables, named from the image's own RTTI where it has any",
+     "vtables <file>", re_cmd_vtables, true},
     {"search", "find text, an immediate value, or a hex pattern with wildcards",
      "search <file> <pattern>", re_cmd_search, true},
     {"rules", "capability findings with the evidence that fired each rule", "rules <file>",

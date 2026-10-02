@@ -4,6 +4,7 @@
 // Depends: re_core and re_utils. Prints to stdout, which is fine for a test binary.
 #include "features/data/re_search.h"
 #include "features/lib/re_demangle.h"
+#include "features/lib/re_demangle_rtti.h"
 #include "features/lib/re_flirt.h"
 #include "utils/sys/re_entropy.h"
 #include "utils/sys/re_time.h"
@@ -369,11 +370,50 @@ static void test_flirt(void) {
     re_arena_free(&a);
 }
 
+// The class names an image's RTTI carries are not function symbols, and reading them
+// as one fails, which left every C++ class in a binary reported under its raw
+// mangling. A template's descriptor names a member instead of the class, and that
+// inner text is a symbol in its own right.
+static void test_rtti_names(void) {
+    re_arena_t a;
+    re_str_t out;
+    re_arena_init(&a, 0);
+#define RTTI(sym) re_demangle_rtti(&a, (sym), strlen(sym), &out)
+    RE_CHECK(RTTI(".?AVProbe@@"));
+    RE_CHECK_EQ_STR(out.p, "Probe");
+    RE_CHECK(RTTI(".?AUplain_struct@@"));
+    RE_CHECK_EQ_STR(out.p, "plain_struct");
+    RE_CHECK(RTTI(".?AWan_enum@@"));
+    RE_CHECK_EQ_STR(out.p, "an_enum");
+    // @@ separates scopes and has to read as ::, or a qualified name comes out as the
+    // mangling it was meant to replace.
+    RE_CHECK(RTTI(".?AVstd@@vector@@"));
+    RE_CHECK_EQ_STR(out.p, "std::vector");
+    // A template descriptor's inner text may be a whole mangled member, and then it is
+    // demangled as one. When it is not a symbol at all it stays as written, because
+    // stripping it to a name would be inventing one.
+    RE_CHECK(RTTI(".?AVfoo@H@1@YAXZ@@"));
+    RE_CHECK_EQ_STR(out.p, "foo@H@1@YAXZ");
+    RE_CHECK(RTTI(".?AV?func@@YAXXZ@@"));
+    RE_CHECK_EQ_STR(out.p, "func()");
+    // Refused rather than guessed: not a descriptor, no closing scope, or a kind that
+    // introduces a base class descriptor instead of a type.
+    RE_CHECK(!RTTI("main"));
+    RE_CHECK(!RTTI(".?AVno_closing@@x"));
+    RE_CHECK(!RTTI(".?BAa_base_class_descriptor@@"));
+    RE_CHECK(!RTTI(".?AV"));
+    RE_CHECK(re_rtti_kind(".?AVProbe@@", strlen(".?AVProbe@@")));
+    RE_CHECK(!re_rtti_kind("?func@@YAXXZ", strlen("?func@@YAXXZ")));
+#undef RTTI
+    re_arena_free(&a);
+}
+
 int re_test_features(void) {
     test_time();
     test_search();
     test_demangle();
-    test_entropy();
+    test_rtti_names();
     test_flirt();
+    test_entropy();
     return 0;
 }

@@ -1,8 +1,10 @@
 // re_demangle.c - Itanium ABI demangling, the common cases done honestly.
 // Module: feature (C11).
 // Owns: the Itanium parser, the substitution pool, and the dispatch entry point.
-// Depends: re_demangle.h only. Output bounded, no globals beyond const tables.
+// Depends: re_demangle.h and re_demangle_rtti. Output bounded, no globals beyond
+//           const tables.
 #include "features/lib/re_demangle.h"
+#include "features/lib/re_demangle_rtti.h"
 
 #include <stddef.h>
 #include <stdio.h>
@@ -451,6 +453,6 @@ bool re_demangle(re_arena_t *a, const char *sym, size_t n, re_str_t *out) {
         case RE_MANGLE_MSVC:
             return re_demangle_msvc(a, sym, n, out);
         default:
-            return false;
+            return re_demangle_rtti(a, sym, n, out);
     }
 }

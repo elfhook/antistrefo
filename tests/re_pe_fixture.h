@@ -15,7 +15,7 @@
 #define IMAGE_BASE 0x180000000ull
 #define TEXT_RVA 0x1000u
 #define EDATA_RVA 0x2000u
-#define EDATA_SIZE 0xD0u
+#define EDATA_SIZE 0x160u
 #define HDRS 0x200u
 #define OPT_SIZE 0xF0u
 #define IMG_BYTES (HDRS + sizeof(kCode) + EDATA_SIZE)
@@ -71,6 +71,8 @@ static inline void put64(uint8_t *p, uint64_t v) {
 }
 
 static inline void build_exports(uint8_t *ed);
+static inline void build_unwind(uint8_t *ed);
+static inline void build_rtti(uint8_t *ed);
 
 // The smallest PE the parser accepts: a DOS stub, a COFF header, a PE32+ optional
 // header with sixteen empty data directories, and one executable section. Every
@@ -168,14 +170,56 @@ static inline void build_exports(uint8_t *ed) {
         str += len + 1;
     }
     memcpy(ed + 0x94, kFwd, sizeof(kFwd)); // the forwarder string, NUL terminated
-    // One RUNTIME_FUNCTION: begin, exclusive end, unwind data pointer.
-    // Written second function first. Every linker emits this table already sorted, so
-    // the parser's own sort is otherwise never exercised: leaving it out would pass
-    // every test here and then binary search unsorted data on an image that did not.
+    build_unwind(ed);
+    build_rtti(ed);
+}
+
+// The exception table, written second function first. Every linker emits this table
+// already sorted, so the parser's own sort is otherwise never exercised: leaving it
+// out passes every test here and then binary searches unsorted data on an image that
+// did not.
+static inline void build_unwind(uint8_t *ed) {
     put32(ed + 0xB0 + 0, CODE_FN1_END);
     put32(ed + 0xB0 + 4, CODE_FN2_END);
     put32(ed + 0xB0 + 8, EDATA_RVA + 0xC0);
     put32(ed + 0xB0 + 12, TEXT_RVA);
     put32(ed + 0xB0 + 16, CODE_FN1_END);
     put32(ed + 0xB0 + 20, EDATA_RVA + 0xC0);
+}
+
+// One C++ class, laid out the way MSVC writes RTTI: a TypeDescriptor holding the
+// mangled name, a Complete Object Locator that names its own address, and a vtable
+// whose slot before the first entry points at that locator. Every number is checked
+// against the image, so a locator with a wrong pSelf cannot pass.
+static inline void build_rtti(uint8_t *ed) {
+    static const char kName[] = ".?AVProbe@@";
+    put64(ed + 0xD0 + 0, EDATA_RVA + 0x120); // the two type_info pointers,
+    put64(ed + 0xD8 + 0, EDATA_RVA + 0x128); // which the runtime compares
+    memcpy(ed + 0xE0, kName, sizeof(kName));
+    // The locator, at 0xF0. Signature 1 is the x64 form.
+    put32(ed + 0xF0 + 0, 1);
+    put32(ed + 0xF0 + 4, 0);                  // offset of the complete object
+    put32(ed + 0xF0 + 8, 0);                  // constructor displacement
+    put32(ed + 0xF0 + 12, EDATA_RVA + 0xD0);  // pTypeDescriptor
+    put32(ed + 0xF0 + 16, EDATA_RVA + 0x108); // pClassDescriptor
+    put32(ed + 0xF0 + 20, EDATA_RVA + 0xF0);  // pSelf, which must be this locator
+    // The base class descriptor, naming the same class and one base.
+    put32(ed + 0x108 + 0, EDATA_RVA + 0xD0);
+    put32(ed + 0x108 + 4, 1); // number of contained bases
+    put32(ed + 0x108 + 8, 0);
+    put32(ed + 0x108 + 12, 0); // mdisp, base at offset zero
+    put32(ed + 0x108 + 16, EDATA_RVA + 0xD0);
+    // The vtable: the slot before the first entry points at the locator.
+    put32(ed + 0x118, EDATA_RVA + 0xF0);
+    put32(ed + 0x120, TEXT_RVA);
+    put32(ed + 0x128, TEXT_RVA + 6);
+    // A decoy locator: every field is well formed except pSelf, which names
+    // somewhere else. Nothing else in a data section repeats an address like this, so
+    // it is the one field that can tell a real locator from a coincidence.
+    put32(ed + 0x148 + 0, 1);
+    put32(ed + 0x148 + 4, 0);
+    put32(ed + 0x148 + 8, 0);
+    put32(ed + 0x148 + 12, EDATA_RVA + 0xD0);
+    put32(ed + 0x148 + 16, EDATA_RVA + 0x108);
+    put32(ed + 0x148 + 20, EDATA_RVA + 0x100); // pSelf, wrong on purpose
 }

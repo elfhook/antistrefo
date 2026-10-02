@@ -335,69 +335,6 @@ int re_cmd_exports(re_ctx_t *ctx, const char *path, int argc, char **argv) {
 // of the tool accepts, and converting it by hand is where the chain breaks. Strings
 // outside any section, such as the ones in the DOS stub, have no RVA and are reported
 // without one rather than with a fabricated zero.
-static void string_row(re_jw_t *w, const re_str_hit_t *h, const re_pe_t *pe) {
-    re_jw_obj(w);
-    re_jw_khex(w, "off", h->off, 8);
-    uint32_t rva = 0;
-    if (re_pe_off2rva(pe, h->off, &rva)) {
-        re_jw_khex(w, "va", pe->image_base + rva, 16);
-        re_jw_ku64(w, "rva", rva);
-    }
-    re_jw_kbool(w, "wide", h->wide);
-    re_jw_kstr(w, "text", h->text);
-    re_jw_obj_end(w);
-}
-
-int re_cmd_strings(re_ctx_t *ctx, const char *path, int argc, char **argv) {
-    (void)argc;
-    (void)argv;
-    re_loaded_t l;
-    re_err_code_t e = load(&l, ctx, path, false, true);
-    if (e != RE_OK) {
-        unload(&l);
-        return re_err_exit_code(e);
-    }
-    re_rx_t *rx = NULL;
-    if (ctx->has_regex) {
-        char *pat = re_arena_strndup(ctx->arena, ctx->regex.p, ctx->regex.n);
-        rx = re_rx_compile(ctx->arena, pat, "i", ctx->err);
-        if (!rx) {
-            unload(&l);
-            return re_err_exit_code(ctx->err->code);
-        }
-    }
-    re_vec_t hits;
-    re_vec_init(&hits, sizeof(re_str_hit_t));
-    size_t matched = RE_VEC_LEN(&l.strs.hits);
-    if (rx)
-        matched = re_strings_filter(ctx->arena, &l.strs, rx, ctx->offset, ctx->limit, &hits);
-    re_jw_t w;
-    re_jw_init(&w, ctx->arena);
-    preamble(&w, "strings", &l);
-    re_jw_ku64(&w, "total", matched);
-    re_jw_ku64(&w, "count", RE_VEC_LEN(&hits));
-    re_jw_kbool(&w, "truncated", matched > RE_VEC_LEN(&hits));
-    re_jw_key(&w, "strings");
-    re_jw_arr(&w);
-    if (rx) {
-        for (size_t i = 0; i < RE_VEC_LEN(&hits); i++)
-            string_row(&w, RE_VEC_PTR(&hits, re_str_hit_t, i), &l.pe);
-    } else {
-        size_t seen = 0;
-        for (size_t i = 0; i < RE_VEC_LEN(&l.strs.hits); i++) {
-            if (ctx->offset && seen++ < ctx->offset)
-                continue;
-            if (ctx->limit && seen - ctx->offset >= ctx->limit)
-                break;
-            string_row(&w, RE_VEC_PTR(&l.strs.hits, re_str_hit_t, i), &l.pe);
-        }
-    }
-    re_jw_arr_end(&w);
-    finish(ctx, &w, &l);
-    unload(&l);
-    return 0;
-}
-
 // Why an rva has no bytes on disk. The two cases look identical from the outside and
 // mean opposite things: an rva outside every section is a mistake, while an rva inside
 // a section that declares no raw data is a packed image, where the code is written at

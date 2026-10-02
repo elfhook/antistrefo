@@ -11,6 +11,7 @@
 
 #include "features/code/re_code.h"
 #include "features/code/re_func.h"
+#include "features/data/re_vtable.h"
 #include "features/lib/re_flirt.h"
 #include "features/meta/re_disasm.h"
 #include "features/pe/re_pe.h"
@@ -178,6 +179,47 @@ static void check_slack_matching(re_code_t *code) {
     RE_CHECK(!re_sig_match(code, code->base + TEXT_RVA, &s));
 }
 
+// The C++ class tables, found structurally rather than by looking for names. A locator
+// is only believed when its pSelf field repeats its own address, which is the one
+// thing in a data section that cannot happen by accident, so a run of coincidental
+// code pointers cannot turn into a class.
+static void check_vtables(const re_pe_t *pe, re_code_t *code, re_arena_t *a) {
+    re_vset_t vs;
+    re_vtable_scan(pe, code, a, &vs);
+    RE_CHECK_FITS(vs.vtables, 1);
+    if (!RE_VEC_LEN(&vs.vtables))
+        return;
+    const re_vtable_t *v = RE_VEC_PTR(&vs.vtables, re_vtable_t, 0);
+    RE_CHECK_EQ_HEX(v->rva, EDATA_RVA + 0x120);
+    RE_CHECK_EQ_HEX(v->col_rva, EDATA_RVA + 0xF0);
+    RE_CHECK_EQ_HEX(v->td_rva, EDATA_RVA + 0xD0);
+    RE_CHECK_EQ_U(v->n_entries, 2);
+    RE_CHECK_EQ_U(vs.n_named, 1);
+    RE_CHECK(v->name.n != 0);
+    RE_CHECK(re_str_eq_cstr(v->name, "Probe"));
+    RE_CHECK(v->demangled);
+    RE_CHECK_EQ_U(v->n_bases, 1);
+    // The entries have to be the two function addresses the fixture wrote, which is
+    // what makes this a class table rather than a table of pointers to something.
+    uint32_t e0 = 0, e1 = 0, e2 = 0;
+    RE_CHECK(re_vtable_entry(pe, v, 0, &e0));
+    RE_CHECK(re_vtable_entry(pe, v, 1, &e1));
+    RE_CHECK_EQ_HEX(e0, TEXT_RVA);
+    RE_CHECK_EQ_HEX(e1, TEXT_RVA + 6);
+    RE_CHECK(!re_vtable_entry(pe, v, 2, &e2));
+    // The locator check on its own, since the whole module rests on it. A locator
+    // whose pSelf was wrong must be refused, and so must one that is not there.
+    uint32_t td = 0, bcd = 0;
+    RE_CHECK(re_vtable_col_at(pe, EDATA_RVA + 0xF0, &td, &bcd));
+    RE_CHECK_EQ_HEX(td, EDATA_RVA + 0xD0);
+    RE_CHECK_EQ_HEX(bcd, EDATA_RVA + 0x108);
+    // The decoy: well formed in every field except pSelf, which names another address.
+    // If the self check goes, this is accepted and a coincidence becomes a class.
+    RE_CHECK(!re_vtable_col_at(pe, EDATA_RVA + 0x148, &td, &bcd));
+    RE_CHECK(!re_vtable_col_at(pe, EDATA_RVA + 0xD0, &td, &bcd));
+    RE_CHECK(!re_vtable_col_at(pe, 0xFFFFFFF0u, &td, &bcd));
+}
+
 int main(void) {
     uint8_t img[IMG_BYTES];
     re_arena_t a;
@@ -202,6 +244,7 @@ int main(void) {
             check_unwind_bounds_function(&code, &scan);
             check_no_split_inside_unwind(&code, &scan);
             check_slack_matching(&code);
+            check_vtables(&pe, &code, &a2);
         }
         re_arena_free(&a2);
     }
