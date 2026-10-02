@@ -33,6 +33,17 @@ if(MSVC)
 endif()
 add_test(NAME tui COMMAND re_test_tui)
 
+# The screen grid and the reference arrangement. Named separately because a layout
+# that has silently stopped composing looks exactly like a layout that never ran.
+add_executable(re_test_screen test_screen.c)
+target_link_libraries(re_test_screen PRIVATE re_core re_utils re_flags)
+if(MSVC)
+    set_property(TARGET re_test_screen
+        PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    target_compile_definitions(re_test_screen PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+add_test(NAME screen COMMAND re_test_screen)
+
 # The command layer lives in the executable, so testing it means running it. This is
 # the only automated coverage a command gets, and without it a command that silently
 # answers "nothing references this" passes every other suite.
