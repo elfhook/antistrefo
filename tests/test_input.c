@@ -10,6 +10,7 @@
 #include "cli/screen/re_draw.h"
 #include "cli/screen/re_focus.h"
 #include "cli/screen/re_input.h"
+#include "cli/screen/re_pseudocode.h"
 
 #include <string.h>
 
@@ -299,6 +300,67 @@ static void test_resize_forces_full_repaint(re_arena_t *a) {
     RE_CHECK_EQ_U(d.cells, 0);
 }
 
+// The mark rule reads the emitter's own output shape: a label, a branch, a call or a
+// return is a landmark, and everything between landmarks is not. Marking every line
+// would mark every line, so the arithmetic has to stay unmarked.
+static void test_pseudo_marks_control_flow(void) {
+    struct {
+        const char *line;
+        uint8_t mark;
+    } kCases[] = {
+        {"L1:\n", 1},
+        {"L12:\n", 1},
+        {"    if (v1 == v2) goto L3;\n", 1},
+        {"    goto L7;\n", 1},
+        {"    v1 = printf(v2);\n", 1},
+        {"    v1 = call_0x140001000(v2);\n", 1},
+        {"    return v3;\n", 1},
+        // An instruction the emitter could not lower is already a comment. Marking it
+        // as well would fill the column with every push and every register move.
+        {"    // 0000000140001280 push rbp\n", 0},
+        {"    uint64_t local_m39;\n", 0},
+        {"    v5 = &local_m81;\n", 0},
+        {"    v7 = v8 + 0x20;\n", 0},
+        // A call with no assignment is not a shape the emitter writes, but it is not
+        // one this rule should claim either.
+        {"    sub_140001000()\n", 0},
+        // An expression that merely begins with L is not a label.
+        {"    Local = 1;\n", 0},
+    };
+    for (size_t i = 0; i < sizeof(kCases) / sizeof(kCases[0]); i++)
+        RE_CHECK_EQ_U(re_pseudo_mark(kCases[i].line), kCases[i].mark);
+}
+
+// Splitting yields every line, in order, and stops at the bound rather than writing
+// past it. A body longer than a pane is cut, and the count is what says so.
+static void test_pseudo_split_bounds(void) {
+    char buf[32];
+    const char *lines[4];
+    uint8_t marks[4];
+    memset(buf, 0, sizeof(buf));
+    memcpy(buf, "a\nb\nc\n", 6);
+    size_t n = re_pseudo_split(buf, lines, marks, 4);
+    RE_CHECK_EQ_U(n, 3);
+    RE_CHECK(strcmp(lines[0], "a") == 0);
+    RE_CHECK(strcmp(lines[2], "c") == 0);
+    RE_CHECK_EQ_U(marks[0], 0);
+
+    memset(buf, 0, sizeof(buf));
+    memcpy(buf, "a\nb\nc\nd\ne\n", 10);
+    n = re_pseudo_split(buf, lines, marks, 4);
+    RE_CHECK_EQ_U(n, 4); // cut at the bound, not overrun
+    RE_CHECK(strcmp(lines[3], "d") == 0);
+
+    RE_CHECK_EQ_U(re_pseudo_split("", lines, marks, 4), 0);
+    RE_CHECK_EQ_U(re_pseudo_split(NULL, lines, marks, 4), 0);
+    // A body with no trailing newline still yields its last line.
+    memset(buf, 0, sizeof(buf));
+    memcpy(buf, "x", 2);
+    n = re_pseudo_split(buf, lines, marks, 4);
+    RE_CHECK_EQ_U(n, 1);
+    RE_CHECK(strcmp(lines[0], "x") == 0);
+}
+
 int main(void) {
     re_arena_t a;
     re_arena_init(&a, 0);
@@ -315,6 +377,8 @@ int main(void) {
     test_focus_survives_rebuild(&a);
     test_diff_writes_nothing_when_unchanged(&a);
     test_resize_forces_full_repaint(&a);
+    test_pseudo_marks_control_flow();
+    test_pseudo_split_bounds();
     re_arena_free(&a);
     return re_test_report("input");
 }

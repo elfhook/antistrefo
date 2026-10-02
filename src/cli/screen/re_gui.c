@@ -8,11 +8,14 @@
 
 #include "features/analysis/re_analyze.h"
 #include "features/code/re_code.h"
+#include "features/code/re_stack.h"
+#include "features/dec/re_decompile.h"
 #include "utils/tui/re_layout.h"
 #include "utils/tui/re_screen.h"
 #include "cli/screen/re_draw.h"
 #include "cli/screen/re_focus.h"
 #include "cli/screen/re_input.h"
+#include "cli/screen/re_pseudocode.h"
 #include "cli/screen/re_term.h"
 
 #include <stdio.h>
@@ -24,15 +27,27 @@
 #define LIST_MAX 256u
 #define LIST_ROWS 24u
 
+// The panes that exist. Two, not five: a tab that opens onto "not in this build" is a
+// promise the tool does not keep, so the strip grows when the panes do.
+#define RE_TAB_COUNT 2u
+
 typedef struct {
     re_analysis_t an;
     re_term_t term;
     re_draw_t draw;
     re_focus_t focus;
     size_t sel; // the selected function
-    size_t tab; // the showing pane
+    size_t tab; // 0 disassembly, 1 pseudocode
     bool mouse; // mouse reporting is on, so the status may say "click"
     bool quit;
+    // What the right pane shows, decided once per turn by the active tab and filled in
+    // by whichever pass produced it. Keeping it here rather than in compose is what
+    // lets the layout stay ignorant of where its text came from.
+    const char **body;
+    const uint8_t *body_marks;
+    size_t body_n;
+    uint32_t body_base;
+    const char *body_note;
 } gui_t;
 
 // The listing for the selected function, rebuilt each frame. The buffers live in the
@@ -46,6 +61,20 @@ typedef struct {
     uint32_t base;
     size_t vis;
 } listing_t;
+
+// The decompiled body, kept across turns. Decompiling walks and lowers the whole
+// function, so doing it on every frame would be doing the same work sixty times a
+// second to produce the same text. It is built once per selected function and reused
+// until the selection moves.
+typedef struct {
+    re_strbuf_t buf;
+    const char *line[RE_PSEUDO_MAX];
+    uint8_t mark[RE_PSEUDO_MAX];
+    size_t n;
+    size_t built_for;
+    bool started;
+    bool ok;
+} pseudo_t;
 
 typedef struct {
     char *name[LIST_MAX];
@@ -118,7 +147,71 @@ static void listing_fill(listing_t *ls, re_arena_t *a, const re_analysis_t *an, 
 }
 
 // The window of function names the list shows, kept centred on the selection so the
-// reader always sees what they moved to.
+// Split the emitted body into lines. The buffer is left intact and the lines are
+// pointers into it, so this is a walk rather than a copy, and the pointers stay valid
+// until the next build of the same function.
+static void pseudo_split(pseudo_t *ps) {
+    re_strbuf_putc(&ps->buf, 0);
+    ps->n = re_pseudo_split(ps->buf.p, ps->line, ps->mark, RE_PSEUDO_MAX);
+}
+
+// The decompiled body for the selected function, built once and reused. Refusing to
+// decompile is the case worth being careful about: an empty pane reads as "this
+// function does nothing", which is a different and wrong claim.
+static void pseudo_fill(pseudo_t *ps, re_arena_t *a, re_analysis_t *an, size_t sel) {
+    if (!ps->started) {
+        re_strbuf_init(&ps->buf, a);
+        ps->started = true;
+        ps->built_for = (size_t)-1;
+    }
+    if (ps->built_for == sel)
+        return;
+    ps->built_for = sel;
+    re_strbuf_clear(&ps->buf);
+    ps->n = 0;
+    if (sel >= RE_VEC_LEN(&an->scan.funcs))
+        return;
+    const re_func_t *f = RE_VEC_PTR(&an->scan.funcs, re_func_t, sel);
+    re_decomp_t d;
+    d.code = &an->code;
+    // The xref set is what turns a call target into a name; without it every call
+    // prints as a bare address.
+    d.xrefs = &an->xs;
+    d.arena = a;
+    re_stack_t st;
+    re_stack_analyze(d.code, f, a, &st);
+    ps->ok = re_decompile_ok(&d, f);
+    if (ps->ok)
+        re_decompile_func(&d, f, &st, &ps->buf);
+    pseudo_split(ps);
+    if (!ps->n) {
+        ps->line[0] = "// this body did not lower: no instruction was recovered from it";
+        ps->mark[0] = 1;
+        ps->n = 1;
+    }
+}
+
+// The right pane's content for the active tab. The disassembly is rebuilt every turn
+// because it is cheap and should follow the selection exactly; the pseudocode is not,
+// and saying so is why the two take different paths.
+static void body_for(gui_t *g, re_arena_t *a, listing_t *ls, pseudo_t *ps, size_t sel) {
+    if (g->tab == 1) {
+        pseudo_fill(ps, a, &g->an, sel);
+        g->body = ps->line;
+        g->body_marks = ps->mark;
+        g->body_n = ps->n;
+        g->body_base = 0;
+        g->body_note = NULL;
+        return;
+    }
+    listing_fill(ls, a, &g->an, sel, ls->vis);
+    g->body = ls->text;
+    g->body_marks = ls->mark;
+    g->body_n = ls->n;
+    g->body_base = ls->base;
+    g->body_note = NULL;
+}
+
 static void funcs_window(const gui_t *g, const funcs_t *l, const char **rows) {
     size_t half = l->vis > 2u ? l->vis / 2u : 0u;
     for (size_t i = 0; i < l->vis; i++) {
@@ -128,9 +221,8 @@ static void funcs_window(const gui_t *g, const funcs_t *l, const char **rows) {
         rows[i] = l->n ? l->name[idx] : "(no functions)";
     }
 }
-
-static void compose(re_screen_t *s, gui_t *g, const funcs_t *l, const listing_t *ls) {
-    static const char *kTabs[] = {"Disasm", "Pseudocode", "Hex", "Imports", "Exports"};
+static void compose(re_screen_t *s, gui_t *g, const funcs_t *l) {
+    static const char *kTabs[RE_TAB_COUNT] = {"Disasm", "Pseudocode"};
     static const char *kToolbar[] = {"Open", "Save", "Graph", "Strngs", "Xrefs", "Help"};
     static const char *kLegend[] = {"code", "branch", "gap", "selected"};
 
@@ -154,14 +246,14 @@ static void compose(re_screen_t *s, gui_t *g, const funcs_t *l, const listing_t 
     L.n_rows = l->vis ? l->vis : 1u;
     L.sel_row = l->vis > 1u ? l->vis / 2u : 0u;
     L.tabs = kTabs;
-    L.n_tabs = 5;
+    L.n_tabs = RE_TAB_COUNT;
     L.active_tab = g->tab;
-    L.code = ls->text;
-    L.n_code = ls->n;
-    L.base_line = ls->base;
-    L.marks = ls->mark;
+    L.code = g->body;
+    L.n_code = g->body_n;
+    L.base_line = g->body_base;
+    L.marks = g->body_marks;
     L.scroll_pos = 0;
-    L.scroll_total = ls->n ? ls->n : 1u;
+    L.scroll_total = g->body_n ? g->body_n : 1u;
     L.status = status;
     L.caret = g->mouse ? "click or Tab; Enter opens; q quits" : "arrows move; q quits";
     L.left_w = 30;
@@ -219,11 +311,12 @@ static void apply(gui_t *g, const re_ev_t *ev) {
 }
 
 // One turn of the loop: compose, paint, wait. Returns false to leave.
-static bool turn(gui_t *g, re_arena_t *a, re_screen_t *frame, funcs_t *list, listing_t *ls) {
+static bool turn(gui_t *g, re_arena_t *a, re_screen_t *frame, funcs_t *list, listing_t *ls,
+                 pseudo_t *ps) {
     if (list->n && g->sel >= list->n)
         g->sel = list->n - 1u;
-    listing_fill(ls, a, &g->an, g->sel, list->vis);
-    compose(frame, g, list, ls);
+    body_for(g, a, ls, ps, g->sel);
+    compose(frame, g, list);
     re_draw_full(&g->draw, frame);
     re_draw_home(&g->draw, 0, 0);
     re_term_write(&g->term, g->draw.out.p, g->draw.out.len);
@@ -287,9 +380,11 @@ int re_cmd_gui(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     memset(&list, 0, sizeof(list));
     listing_t ls;
     memset(&ls, 0, sizeof(ls));
+    pseudo_t ps;
+    memset(&ps, 0, sizeof(ps));
     if (ready && have_draw && have_frame) {
         funcs_fill(&list, &arena, &g.an);
-        while (turn(&g, &arena, &frame, &list, &ls))
+        while (turn(&g, &arena, &frame, &list, &ls, &ps))
             ;
     }
     re_term_close(&g.term);
