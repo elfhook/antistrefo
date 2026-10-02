@@ -30,7 +30,11 @@ bool re_rtti_kind(const char *sym, size_t n) {
 // alone: it stands for a scope already written, and expanding it without the name it
 // refers to would invent one.
 static re_str_t scope_sep(re_arena_t *a, re_str_t inner) {
-    char *buf = (char *)re_arena_alloc(a, inner.n);
+    // One byte more than the input, and a terminator written. The result is a span, but
+    // every caller treats the pointer as a C string, so it has to be one: an arena
+    // block carries whatever the previous use left after it, and a name that ends
+    // correctly but is not terminated reads on into that.
+    char *buf = (char *)re_arena_alloc(a, inner.n + 1u);
     if (!buf)
         return re_str("");
     size_t w = 0;
@@ -43,6 +47,7 @@ static re_str_t scope_sep(re_arena_t *a, re_str_t inner) {
             buf[w++] = inner.p[i];
         }
     }
+    buf[w] = '\0';
     return re_strn(buf, w);
 }
 
