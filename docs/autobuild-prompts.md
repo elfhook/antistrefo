@@ -205,7 +205,7 @@ Two things exist internally but are NOT visible to the user:
 
 1. CFG. src/features/dec/re_dc_walk.c already computes basic blocks and labels
    per function - but only as an intermediate step feeding the decompiler. There
-   is no command that exposes a control flow graph. IDA users expect this
+   is no command that exposes a control flow graph. Anyone reading a binary
    (its Graph View is built on it).
 
 2. Data detection. src/features/data/ has string extraction, search, rules and
@@ -223,11 +223,11 @@ YOUR TASK
 2. Add a whole-image `blocks` view classifying each region as code, data,
    rdata or padding, with the evidence for each classification (is it a
    function start? reached by a branch? high entropy? read-only section?
-   jump table? string?). This is IDA's "code vs data" separation. Every region
+   jump table? string?). This is the "code vs data" separation. Every region
    must carry an explicit confidence or "unknown" - never a bare guess.
 3. Add data xrefs: for each string, constant and jump table, which functions
    reference it, at which instruction. This is the "String 'Hello' -> function
-   sub_14001230" edge IDA builds, and it is what makes a string finding
+   sub_14001230" edge such a tool builds, and it is what makes a string finding
    actionable rather than just a list of offsets.
 4. Graceful degradation on protected inputs: never crash, hang or loop; report
    what is knowable and mark the rest unknown. A wrong classification is worse
@@ -279,12 +279,12 @@ antistrefo: C11/C++17 static-analysis CLI and MCP server, CMake, branch main.
 
 THE ARCHITECTURAL GAP
 Every command currently re-opens and re-parses the target file and rediscovers
-everything from scratch. Nothing is shared between commands. That is why the
-tool cannot produce an IDA-style overview.
+everything from scratch. Nothing is shared between commands, so no command can
+show what another one found, and the report repeats the work every time.
 
-IDA's Auto Analysis is fundamentally a scheduler over a persistent database: it
+Automatic analysis is fundamentally a scheduler over a persistent database: it
 loads once, then runs ordered passes over shared state, with everything
-cross-referencing everything else. IDA's passes are roughly:
+cross-referencing everything else. The passes are roughly:
   FL  follow execution flow
   PR  create functions
   SP  analyze stack pointers
@@ -303,7 +303,7 @@ YOUR TASK
    packer/obfuscation indicators, and anything the analysis could NOT determine.
    The "could not determine" section matters as much as the findings.
 3. Make the shared context persistent within a session so it survives across
-   commands - IDA's IDB analogue. The interactive shell (src/cli/app/re_shell.c)
+   commands - a persistent database analogue. The interactive shell (src/cli/app/re_shell.c)
    currently remembers only the opened path; have it retain the parsed file, PE
    structure, function scan and xrefs. A driver scan measures 9-62 ms today, so
    justify the design against that number and report what you measured.
@@ -356,12 +356,12 @@ Assumes prompts 1, 2 and 3 are committed.
 CONTEXT
 antistrefo: C11/C++17 static-analysis CLI and MCP server, CMake, branch main.
 
-A NOTE ON SCOPE, because this prompt is the long pole. IDA's Auto Analysis
-(items 1-5, 7-8) is NOT decompilation. Decompilation is Hex-Rays, a separate
-product that CONSUMES Auto Analysis's output. Type propagation and
-stack-to-argument inference are Hex-Rays-class work and are the hardest thing
-in this list. Do not pretend otherwise by shipping something that merely looks
-like type recovery - report honestly what works.
+A NOTE ON SCOPE, because this prompt is the long pole. Automatic analysis
+(items 1-5, 7-8) is NOT decompilation. Pseudocode is a separate, much
+larger problem; argument recovery, calling convention inference and
+stack-to-argument inference are the hardest thing in the list. Do not pretend
+otherwise by shipping something that merely looks like type recovery - report
+honestly what works.
 
 Already built:
 - src/features/code/re_stack.c is a REAL pass, not a stub. Sound
@@ -385,7 +385,7 @@ reported as complete is not.
    that never touches its arguments.
 2. Surface the stack analysis in output: per function, argument registers,
    frame size, and local slot count, in `funcs`, in the framed renderer, and in
-   the decompiler's function signature. This is the "IDA infers
+   the decompiler's function signature. This is where the tool infers
    void Function(int arg1, int arg2)" item, and it is achievable now.
 3. Extend the IR with a real type lattice - at minimum integer widths
    (i8/i16/i32/i64), pointer, and float - and propagate types through the

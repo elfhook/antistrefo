@@ -42,7 +42,7 @@ typedef struct {
 void re_search_init(re_search_t *s);
 
 // Parse a pattern into a byte pattern. '?' is a one byte wildcard and "??" is a
-// two byte wildcard, which is the FLAIR and IDA signature convention. Returns
+// two byte wildcard, which is the convention every signature format uses. Returns
 // false and fills err on an odd digit count or a stray character.
 bool re_search_parse_pattern(re_arena_t *a, const char *pat, uint8_t **bytes, uint8_t **mask,
                              size_t *n, re_err_t *err);

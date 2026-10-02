@@ -139,9 +139,9 @@ static void list_commands(re_report_t *r) {
 }
 
 // The session's analysis of the open file: the file stays mapped, the PE stays
-// parsed, and every pass runs once. IDA's IDB, reduced to what a session needs.
-// Held in its own arena so it survives the per command arena and the per line arena,
-// both of which are reset underneath it.
+// parsed, and every pass runs once. A persistent database of everything already
+// worked out, reduced to what a session needs. Held in its own arena so it survives
+// the per command arena and the per line arena, both of which are reset underneath.
 typedef struct {
     re_arena_t arena;
     re_analysis_t an;

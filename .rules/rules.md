@@ -12,8 +12,8 @@ drive through MCP. One binary, two modes:
     antistrefo <command> [args]    human / agent / shell usage
     antistrefo mcp                  MCP server over stdio
 
-Static analysis only. No debugger, no decompiler, no IDB. See section 8 for the
-full scope verdict on IDA Pro's feature set.
+Static analysis only. No debugger, no decompiler, no persistent database. See
+section 8 for the full scope verdict.
 
 The C symbol prefix stays `re_` and the macro prefix `RE_`. That is deliberate and
 not a leftover: the prefix is a link-time namespace guard against Capstone and zlib
@@ -214,25 +214,25 @@ build, which is what makes "check the catalog" trustworthy rather than aspiratio
 | 5 | unsupported format or architecture |
 | 6 | I/O error or out of memory |
 
-## 8. Feature scope, verdicts on the IDA Pro feature set
+## 8. Feature scope
 
-| IDA family | Verdict | Where |
+| Capability | Verdict | Where |
 |---|---|---|
 | Layout, segments, entry points, compiler fingerprint | Build | feature/pe, feature/elf |
 | Function detection, SP/stack analysis, jump tables, noret | Build | feature/code |
-| FLIRT / sigdb byte-pattern library ID | Build | feature/flirt |
+| FLIRT-style byte-pattern library identification | Build | feature/flirt |
 | Disassembly | Build | feature/disasm |
 | Cross-references, code and data | Build | feature/xref |
 | Search: text, immediate, binary with wildcards | Build | feature/search |
 | Demangling, itanium and MSVC | Build | feature/symbols |
 | Capability rules, capa-lite | Build | feature/rules |
-| Type libraries (TIL), Lumina | Skip | needs a full IDB and type inference |
+| Type libraries, library metadata services | Skip | needs a full database and type inference |
 | Structs, enums, C header parse | Defer | post v1 |
 | Decompiler, Tier A only | Skip | no pseudocode at all, summary only |
 | **Decompiler, Tier B** | **Build** | a C-like emitter over a stack transfer IR, see section 8.1 |
 | Debugger | Skip | static only |
-| IDAPython / IDC / plugins | Skip | the CLI is the scriptable surface |
-| IDB, Teams, undo | Skip | use an in-memory LRU session cache |
+| Embedded scripting languages, plugin loader | Skip | the CLI and MCP are the scriptable surface |
+| Shared databases, multi-user merge, undo | Skip | use an in-memory LRU session cache |
 
 The decompiler substitute for triage is a rich **function summary**: signature guess, callers,
 callees, strings touched, constants, loop and switch counts, suspicious markers.
@@ -241,22 +241,21 @@ has, which is where to look next.
 
 ### 8.1 Decompiler scope, Tier B
 
-The goal is a smaller, far faster Ghidra or IDA, not a Hex-Rays clone. That target is
-reachable only in Tier B, and its quality bar is deliberately low:
+The goal is a much smaller and far faster analyser, not a research decompiler. That
+target is reachable only in Tier B, and its quality bar is deliberately low:
 
 - **In scope**: disassembly, function recovery, CFG and switch tables, stack frame
   recovery, calling convention inference, a register transfer IR, and a C-like
   emitter that gets control flow, locals and call names right.
 - **Out of scope**: type inference, structure recovery, full C++ support, and anything
-  that would make us chase Hex-Rays. Wrong types are acceptable; wrong control flow
-  is not.
-- **The advantage is speed, not quality.** `triage` must stay under 15ms on a 40KB
-  driver, where Ghidra headless decompile takes 30 seconds to 2 minutes. antistrefo
-  is the fast deterministic first stage of a pipeline, not the last one.
+    of that kind. Wrong types are acceptable; wrong control flow is not.
+  - **The advantage is speed, not quality.** `triage` must stay under 15ms on a 40KB
+    driver, where the heavyweight analysers take 30 seconds to 2 minutes. antistrefo
+    is the fast deterministic first stage of a pipeline, not the last one.
 
 Consequences that are already binding:
 
-- The IR is a **register transfer language** in the style of Ghidra P-code: every
+  - The IR is a **register transfer language**: every instruction becomes a small,
   instruction lowers to side-effect-free operations on typed varnodes, with
   side effects written explicitly as LOAD and STORE. The IR contract is designed in
   task 1, before any disassembler exists, so the emitter can be added later without

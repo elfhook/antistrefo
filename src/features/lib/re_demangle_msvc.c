@@ -123,8 +123,8 @@ static const char *class_label(char kind) {
         return " union";
     if (kind == 'W')
         return " enum";
-    // A class gets no keyword. In C++ a declaration does not need one, and IDA
-    // omits it, so printing one only makes the two renderings disagree.
+    // A class gets no keyword. In C++ a declaration does not need one, and
+    // every other tool omits it, so printing one only makes the renderings disagree.
     return "";
 }
 
