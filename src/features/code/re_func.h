@@ -29,6 +29,7 @@ extern "C" {
 #define RE_FUNC_EXTERNAL 0x0080u // makes a call that leaves the code section
 #define RE_FUNC_JTABLE 0x0100u   // ends in a jump table dispatch
 #define RE_FUNC_RET 0x0200u      // a return was seen on at least one path
+#define RE_FUNC_UNWIND 0x0400u   // the PE exception table places its bounds
 
 #define RE_FUNC_MAX_INSNS 4096u
 

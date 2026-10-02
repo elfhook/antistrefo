@@ -23,6 +23,9 @@ extern "C" {
 #define RE_PE_MAX_DIRS 16
 #define RE_PE_DLL_NAME_MAX 96
 #define RE_PE_IMPORT_LIMIT 4096
+// Far above any real image. A directory claiming more entries than this is a number
+// from a hostile file, and stopping is the only safe reading.
+#define RE_PE_UNWIND_LIMIT 1000000u
 
 typedef struct {
     char name[9];
@@ -49,6 +52,16 @@ typedef struct {
     re_str_t name;
 } re_pe_exp_t;
 
+// One RUNTIME_FUNCTION: the compiler's own statement of where a function starts and
+// where it ends. On x64 every function that can throw or unwind has one, which makes
+// this the closest thing a PE has to a function list. It is not complete - a leaf
+// function that needs no frame has no entry - so it is evidence, not the truth.
+typedef struct {
+    uint32_t begin; // rva
+    uint32_t end;   // rva, exclusive
+    uint32_t unwind;
+} re_pe_unwind_t;
+
 typedef struct {
     bool valid;
     bool pe32plus;
@@ -73,6 +86,7 @@ typedef struct {
     re_vec_t imports; // re_pe_imp_t
     re_vec_t syms;    // re_str_t, flat, indexed by first_sym
     re_vec_t exports; // re_pe_exp_t
+    re_vec_t unwind;  // re_pe_unwind_t, from the exception directory
     re_span_t img;    // the bytes this was parsed from, so a later pass can read them
     re_err_t err;
 } re_pe_t;
@@ -109,6 +123,13 @@ const char *re_pe_region_kind(const re_pe_section_t *s);
 // for anything that is not a forwarder.
 re_str_t re_pe_export_forwarder(const re_pe_t *pe, uint32_t rva);
 
+// The unwind entry covering an rva. Fills out and returns true when one does, so the
+// caller gets a copy rather than a pointer into a vector that may still grow. A
+// caller seeding a function can use this to refuse a start that lands inside a
+// function the compiler already described, which is how a "sub rsp, 0x28" in the
+// middle of a body stops being mistaken for a prologue.
+bool re_pe_unwind_covering(const re_pe_t *pe, uint32_t rva, re_pe_unwind_t *out);
+
 // The reverse mapping, for turning a file offset back into a virtual address.
 bool re_pe_off2rva(const re_pe_t *pe, uint64_t off, uint32_t *out);
 
@@ -121,6 +142,7 @@ enum {
     RE_PE_DD_EXPORT = 0,
     RE_PE_DD_IMPORT = 1,
     RE_PE_DD_RESOURCE = 2,
+    RE_PE_DD_EXCEPTION = 3,
     RE_PE_DD_SECURITY = 4,
     RE_PE_DD_DEBUG = 6,
     RE_PE_DD_TLS = 9,

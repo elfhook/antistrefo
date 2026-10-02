@@ -9,6 +9,9 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "features/code/re_code.h"
+#include "features/code/re_func.h"
+#include "features/meta/re_disasm.h"
 #include "features/pe/re_pe.h"
 #include "utils/mem/re_arena.h"
 
@@ -91,6 +94,58 @@ static void check_one_flag_is_enough(void) {
     }
 }
 
+// The exception directory is the compiler's own function list, so it is the one part
+// of the PE that states where functions are rather than hinting. It was parsed with a
+// NULL arena first, which crashed on every image including ones with no exception
+// table at all, and no fixture exercised it. Now one is always present.
+static void check_unwind(const re_pe_t *pe) {
+    RE_CHECK_FITS(pe->unwind, 2);
+    re_pe_unwind_t u;
+    RE_CHECK(re_pe_unwind_covering(pe, TEXT_RVA, &u));
+    RE_CHECK_EQ_HEX(u.begin, TEXT_RVA);
+    RE_CHECK_EQ_HEX(u.end, CODE_FN1_END);
+    RE_CHECK(re_pe_unwind_covering(pe, CODE_FN2_END - 1u, &u));
+    RE_CHECK_EQ_HEX(u.begin, CODE_FN1_END);
+    RE_CHECK_EQ_HEX(u.end, CODE_FN2_END);
+    // The end is exclusive, so the last byte of a function is covered and the byte
+    // after it is not. An off by one here would silently drop the final instruction.
+    RE_CHECK(!re_pe_unwind_covering(pe, CODE_FN2_END, &u));
+    RE_CHECK(!re_pe_unwind_covering(pe, EDATA_RVA, &u));
+}
+
+// A function that begins where the unwind table says so takes its end from there, so
+// the reported size is the compiler's and not wherever the walk happened to stop.
+static void check_unwind_bounds_function(re_code_t *code, const re_fscan_t *scan) {
+    const re_func_t *f =
+        re_func_index_of(scan, code->base + TEXT_RVA) >= 0
+            ? re_func_at(scan, (size_t)re_func_index_of(scan, code->base + TEXT_RVA))
+            : NULL;
+    RE_CHECK(f != NULL);
+    if (!f)
+        return;
+    RE_CHECK(f->flags & RE_FUNC_UNWIND);
+    RE_CHECK_EQ_HEX(f->size, CODE_FN1_END - TEXT_RVA);
+}
+
+// The byte test that finds prologue shaped code cannot tell a "sub rsp, 0x20" at a
+// real entry from one three bytes into a function body. The exception table can,
+// because the compiler wrote down where the function actually ends. So the second
+// fixture function must come back as exactly one function: if the interior stack
+// adjustment ever starts a second one, a real function has been split in two.
+static void check_no_split_inside_unwind(re_code_t *code, const re_fscan_t *scan) {
+    size_t starts = 0;
+    uint64_t interior = code->base + CODE_FN1_END + 1u; // the sub rsp itself
+    uint64_t lo = code->base + CODE_FN1_END, hi = code->base + CODE_FN2_END;
+    for (size_t i = 0; i < RE_VEC_LEN(&scan->funcs); i++) {
+        uint64_t va = re_func_at(scan, i)->va;
+        if (va == interior)
+            starts++;
+        else if (va >= lo && va < hi)
+            starts++;
+    }
+    RE_CHECK_EQ_U(starts, 1);
+}
+
 int main(void) {
     uint8_t img[IMG_BYTES];
     re_arena_t a;
@@ -103,6 +158,20 @@ int main(void) {
     check_exports(&pe);
     check_export_kinds(&pe);
     check_one_flag_is_enough();
+    check_unwind(&pe);
+    {
+        // The scanner must agree with the table, which means it needs the code layer.
+        re_arena_t a2;
+        re_code_t code;
+        re_fscan_t scan;
+        re_arena_init(&a2, 65536);
+        if (re_code_init(&code, re_span(img, sizeof(img)), &pe, re_disasm_find("x86-64"), &a2)) {
+            re_func_scan(&code, &a2, &scan);
+            check_unwind_bounds_function(&code, &scan);
+            check_no_split_inside_unwind(&code, &scan);
+        }
+        re_arena_free(&a2);
+    }
     re_arena_free(&a);
     return re_test_report("pe");
 }

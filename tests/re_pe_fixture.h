@@ -15,7 +15,7 @@
 #define IMAGE_BASE 0x180000000ull
 #define TEXT_RVA 0x1000u
 #define EDATA_RVA 0x2000u
-#define EDATA_SIZE 0xB0u
+#define EDATA_SIZE 0xD0u
 #define HDRS 0x200u
 #define OPT_SIZE 0xF0u
 #define IMG_BYTES (HDRS + sizeof(kCode) + EDATA_SIZE)
@@ -32,6 +32,11 @@
 //
 // Under the bug this suite exists for, only the first block was decoded and the
 // graph came back as one block, so "more than one block" is the load bearing check.
+//
+// Then a second function at +20 whose third byte is a "sub rsp, 0x20" that no
+// prologue test can tell from an entry point. Both are described in the exception
+// table, so a scanner that trusts the table must report one function there and not
+// two, which is the only way to catch a split back out of a known function body.
 static const uint8_t kCode[] = {
     0x48, 0x83, 0xf8, 0x01,       // 1000 cmp rax,1
     0x74, 0x07,                   // 1004 je +7 -> 100D
@@ -40,7 +45,13 @@ static const uint8_t kCode[] = {
     0xb8, 0x02, 0x00, 0x00, 0x00, // 100D mov eax,2
     0xc3,                         // 1012 ret
     0xc3,                         // 1013 ret
+    0x53,                         // 1014 push rbx
+    0x48, 0x83, 0xec, 0x20,       // 1015 sub rsp,0x20  <- looks like a prologue
+    0x5d,                         // 1019 pop rbx
+    0xc3,                         // 101A ret
 };
+#define CODE_FN1_END (TEXT_RVA + 20u)
+#define CODE_FN2_END (TEXT_RVA + 27u)
 
 static inline void put16(uint8_t *p, uint16_t v) {
     p[0] = (uint8_t)v;
@@ -85,6 +96,14 @@ static inline void build_pe(uint8_t *img) {
     put32(opt + 108, 16);          // NumberOfRvaAndSizes
     put32(opt + 112, EDATA_RVA);   // export directory
     put32(opt + 116, EDATA_SIZE);
+    // The exception directory, pointed into the same data section rather than a
+    // third one. Directory i lives at optional header offset 112 + i * 8, so the
+    // exception table is index 3 and sits at 136. It carries one RUNTIME_FUNCTION
+    // covering the whole of .text, which is what lets a test prove both that the
+    // table parses and that the function scanner takes its end from the compiler
+    // rather than from where a walk stopped.
+    put32(opt + 136, EDATA_RVA + 0xB0);
+    put32(opt + 140, 24);
     uint8_t *sec = img + 0x148; // lfanew + 4 + 20 + SizeOfOptionalHeader
     memcpy(sec, ".text", 5);
     put32(sec + 8, (uint32_t)sizeof(kCode));  // VirtualSize
@@ -149,4 +168,14 @@ static inline void build_exports(uint8_t *ed) {
         str += len + 1;
     }
     memcpy(ed + 0x94, kFwd, sizeof(kFwd)); // the forwarder string, NUL terminated
+    // One RUNTIME_FUNCTION: begin, exclusive end, unwind data pointer.
+    // Written second function first. Every linker emits this table already sorted, so
+    // the parser's own sort is otherwise never exercised: leaving it out would pass
+    // every test here and then binary search unsorted data on an image that did not.
+    put32(ed + 0xB0 + 0, CODE_FN1_END);
+    put32(ed + 0xB0 + 4, CODE_FN2_END);
+    put32(ed + 0xB0 + 8, EDATA_RVA + 0xC0);
+    put32(ed + 0xB0 + 12, TEXT_RVA);
+    put32(ed + 0xB0 + 16, CODE_FN1_END);
+    put32(ed + 0xB0 + 20, EDATA_RVA + 0xC0);
 }

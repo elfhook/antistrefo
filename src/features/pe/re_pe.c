@@ -4,6 +4,7 @@
 // Depends: re_pe.h and the utils. No I/O, no globals, never trusts a file count.
 #include "features/pe/re_pe.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #define PE_FILE_EXECUTABLE 0x0002u
@@ -289,12 +290,71 @@ static re_err_code_t parse_exports(re_span_t img, re_pe_t *pe, re_arena_t *a) {
     return RE_OK;
 }
 
+static int unwind_cmp(const void *l, const void *r) {
+    uint32_t a = ((const re_pe_unwind_t *)l)->begin, b = ((const re_pe_unwind_t *)r)->begin;
+    return a < b ? -1 : (a > b ? 1 : 0);
+}
+
+// The exception directory, which on x64 is a flat array of RUNTIME_FUNCTION records:
+// a begin, an exclusive end, and a pointer to the unwind data. The compiler writes
+// one per function that can throw, so this is a function list the author of the code
+// stated rather than one inferred from bytes. Entries with a zero begin are chained
+// padding and are skipped, and a count that does not fit the directory is not trusted.
+static re_err_code_t parse_unwind(re_span_t img, re_pe_t *pe, re_arena_t *a) {
+    if (pe->n_dirs <= RE_PE_DD_EXCEPTION || pe->dd_rva[RE_PE_DD_EXCEPTION] == 0)
+        return RE_OK;
+    uint64_t off, size = pe->dd_size[RE_PE_DD_EXCEPTION];
+    if (!re_pe_rva2off(pe, pe->dd_rva[RE_PE_DD_EXCEPTION], &off))
+        return RE_OK;
+    if (size < 12)
+        return RE_OK;
+    uint32_t n = (uint32_t)(size / 12u);
+    if (n > RE_PE_UNWIND_LIMIT)
+        n = RE_PE_UNWIND_LIMIT;
+    for (uint32_t i = 0; i < n; i++) {
+        re_pe_unwind_t u;
+        if (!rd32(img, off + (uint64_t)i * 12u, &u.begin) ||
+            !rd32(img, off + (uint64_t)i * 12u + 4u, &u.end) ||
+            !rd32(img, off + (uint64_t)i * 12u + 8u, &u.unwind))
+            break;
+        if (u.begin == 0 || u.end <= u.begin)
+            continue;
+        if (!RE_VEC_PUSH(&pe->unwind, a, u))
+            return fail(pe, RE_E_NOMEM, "out of arena memory reading the exception table");
+    }
+    if (RE_VEC_LEN(&pe->unwind) > 1)
+        qsort(pe->unwind.base, RE_VEC_LEN(&pe->unwind), sizeof(re_pe_unwind_t), unwind_cmp);
+    return RE_OK;
+}
+
+// The exception table is sorted by begin address in every linker that emits it, so a
+// binary search answers "is this address inside a known function" in a dozen steps.
+// A linear scan would be a hundred thousand times that on the largest binary in the
+// corpus, called once per candidate function start.
+bool re_pe_unwind_covering(const re_pe_t *pe, uint32_t rva, re_pe_unwind_t *out) {
+    size_t lo = 0, hi = RE_VEC_LEN(&pe->unwind);
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2u;
+        const re_pe_unwind_t *u = RE_VEC_PTR(&pe->unwind, re_pe_unwind_t, mid);
+        if (rva < u->begin)
+            hi = mid;
+        else if (rva >= u->end)
+            lo = mid + 1u;
+        else {
+            *out = *u;
+            return true;
+        }
+    }
+    return false;
+}
+
 re_err_code_t re_pe_parse(re_span_t img, re_arena_t *a, re_pe_t *out) {
     memset(out, 0, sizeof(*out));
     out->img = img;
     re_vec_init(&out->imports, sizeof(re_pe_imp_t));
     re_vec_init(&out->syms, sizeof(re_str_t));
     re_vec_init(&out->exports, sizeof(re_pe_exp_t));
+    re_vec_init(&out->unwind, sizeof(re_pe_unwind_t));
     out->err.code = RE_OK;
     re_err_code_t e = parse_headers(img, out);
     if (e != RE_OK)
@@ -309,7 +369,10 @@ re_err_code_t re_pe_parse(re_span_t img, re_arena_t *a, re_pe_t *out) {
     e = parse_imports(img, out, a);
     if (e != RE_OK)
         return e;
-    return parse_exports(img, out, a);
+    e = parse_exports(img, out, a);
+    if (e != RE_OK)
+        return e;
+    return parse_unwind(img, out, a);
 }
 
 const char *re_pe_machine_name(uint16_t m) {

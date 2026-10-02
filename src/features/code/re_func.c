@@ -196,6 +196,32 @@ static int cmp_va(const void *a, const void *b, void *ctx) {
     return x->va > y->va ? 1 : 0;
 }
 
+// The unwind table is the compiler's own list of where its functions begin and end.
+// Where it is present it beats any inference from bytes: it gives a function that no
+// call points at, such as one reached only through SEH or a runtime callback, and it
+// gives the exact end rather than the end the walk happened to reach. It is not
+// complete, because a leaf function needing no frame has no entry, so this runs
+// alongside the sweep rather than instead of it.
+static void unwind_pass(walk_t *w) {
+    const re_pe_t *pe = w->code->pe;
+    for (size_t i = 0; i < RE_VEC_LEN(&pe->unwind); i++) {
+        const re_pe_unwind_t *u = RE_VEC_PTR(&pe->unwind, re_pe_unwind_t, i);
+        uint64_t start = w->code->base + u->begin;
+        if (!re_code_in_code(w->code, start) || re_code_covered(w->code, start, 1))
+            continue;
+        re_func_t f;
+        walk_func(w, start, &f);
+        if (f.n_insns == 0)
+            continue;
+        f.flags |= RE_FUNC_UNWIND;
+        // The compiler knows where the function stops even when the walk stopped
+        // early, so the declared end wins over the walked one.
+        if (u->end > u->begin && f.rva + f.size < u->end)
+            f.size = u->end - u->begin;
+        RE_VEC_PUSH(w->out, w->a, f);
+    }
+}
+
 // The prologue sweep. Functions reached only through a vtable or a driver
 // dispatch table are not pointed at by any call, so without this pass they are
 // invisible. It is a byte test, not a decode, and it only starts a walk on
@@ -209,6 +235,13 @@ static void sweep(walk_t *w) {
             re_func_t f;
             if (re_code_covered(w->code, at, 1))
                 continue;
+            // A byte test says "sub rsp, 0x28" looks like a prologue. Inside a
+            // function the compiler already described, that is a stack adjustment
+            // mid body, and starting one there is how one real function became two.
+            re_pe_unwind_t u;
+            if (re_pe_unwind_covering(w->code->pe, (uint32_t)(at - w->code->base), &u) &&
+                w->code->base + u.begin != at)
+                continue;
             if (!looks_like_start(w->code, at))
                 continue;
             walk_func(w, at, &f);
@@ -218,6 +251,22 @@ static void sweep(walk_t *w) {
             RE_VEC_PUSH(w->out, w->a, f);
             at += f.size ? f.size - 1 : 0;
         }
+    }
+}
+
+// A function that begins where the compiler put an unwind entry takes its end from
+// there too, whichever pass happened to discover it first. Most of the table is
+// already reached by a call, so without this the declared end is available but
+// unused, and a function the walk stopped short of keeps the short size.
+static void adopt_unwind(const re_pe_t *pe, re_vec_t *funcs) {
+    for (size_t i = 0; i < RE_VEC_LEN(funcs); i++) {
+        re_func_t *f = RE_VEC_PTR(funcs, re_func_t, i);
+        re_pe_unwind_t u;
+        if (!re_pe_unwind_covering(pe, f->rva, &u) || u.begin != f->rva)
+            continue;
+        f->flags |= RE_FUNC_UNWIND;
+        if (u.end > u.begin)
+            f->size = u.end - u.begin;
     }
 }
 
@@ -252,7 +301,9 @@ void re_func_scan(re_code_t *c, re_arena_t *a, re_fscan_t *out) {
             f.flags |= RE_FUNC_ENTRY;
         RE_VEC_PUSH(&out->funcs, a, f);
     }
+    unwind_pass(&w);
     sweep(&w);
+    adopt_unwind(c->pe, &out->funcs);
     re_vec_sort(&out->funcs, cmp_va, NULL);
 }
 
