@@ -1,0 +1,16 @@
+---
+description: What antistrefo builds, skips, and how far the emitter may go
+alwaysApply: true
+---
+
+# Feature scope
+
+Build: PE and ELF layout, function detection, stack and jump tables, FLIRT-style identification, disassembly, cross-references, search, Itanium and MSVC demangling, capability rules, and the Tier B C-like emitter.
+
+Skip: type libraries, a Tier A decompiler, a debugger, embedded scripting, plugin loaders, and shared databases. Structs, enums, and C header parse are deferred.
+
+Tier B is in scope: disassembly, function recovery, CFG and switch tables, stack frames, calling-convention inference, a register-transfer IR, and a C-like emitter that gets control flow, locals, and call names right. Type inference, structure recovery, and full C++ are out of scope. Wrong types are acceptable. Wrong control flow is not.
+
+`triage` must stay under 15ms on a 40KB driver. Lead the surface with `antistrefo triage`. Everything else is drill-down.
+
+The IR lowers each instruction to side-effect-free operations on typed varnodes. Memory side effects are explicit LOAD and STORE. Architectures land x86-64 first, then ARM-64. x86-32 follows only if the corpus demands it.

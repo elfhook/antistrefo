@@ -53,6 +53,7 @@ typedef struct {
     size_t n_code;
     uint32_t base_line;
     const uint8_t *marks; // one byte per code line: nonzero where there is a mark
+    bool syntax;          // colour the code pane as C-like source
     size_t scroll_pos;
     size_t scroll_total;
 

@@ -1,0 +1,24 @@
+---
+description: Reuse utils instead of hand-rolled buffers, strings, and hashes
+alwaysApply: true
+---
+
+# Reuse first
+
+Before writing a function, read `docs/util-catalog.md` and grep `src/utils/`. Do not reinvent what exists.
+
+| If you were about to write | Use |
+|---|---|
+| a byte-by-byte copy loop | `re_memcpy` on a sized span |
+| `realloc` or manual buffer doubling | `re_strbuf_*` |
+| a grow-array with capacity doubling | `re_vec_*` |
+| `strlen` / `strcmp` / `strcat` / `strtok` | `re_str_*` |
+| hex nibble arithmetic | `re_hex_*` |
+| `sprintf` or manual int-to-decimal | `re_strbuf_appendf`, `re_fmt_*` |
+| `while (x) { x &= x - 1; }` | `re_bits_*` |
+| a hand-rolled hash or CRC | `re_crc_*`, `re_hash_*` |
+| splitting on `/` or `\` | `re_path_*` |
+| a `switch` that emits `{"k":` | `re_jw_*` |
+| `fprintf(stderr, ...)` | `re_log_*` |
+
+Escape hatch: used once, 15 lines or fewer, and no loop over bytes stays `static` in the caller. Needed twice, or it loops over bytes, or it crosses a module: make a util first. Never inline a would-be util into its consumer. A util that would pass 500 lines splits; it is never absorbed.

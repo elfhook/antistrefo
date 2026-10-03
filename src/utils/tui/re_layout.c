@@ -6,6 +6,7 @@
 //           report can reuse it by filling the struct differently.
 #include "utils/tui/re_layout.h"
 #include "utils/tui/re_screen.h"
+#include "utils/tui/re_syntax.h"
 
 // The split is a proportion rather than a column count, because a fixed left column
 // that is right on an 80 column terminal is most of the screen on a 200 column one,
@@ -170,9 +171,14 @@ static void draw_body(re_screen_t *s, re_layout_t *L, uint16_t split, const fram
             re_screen_fill(s, y, 1, (uint16_t)(split - 1u), 1, " ", st, zone);
             re_screen_put_run(s, y, 2, split, L->rows[r] ? L->rows[r] : "", st, zone);
         }
-        if (L->code && r < L->n_code && split + 2u < last)
-            re_screen_put_run(s, y, (uint16_t)(split + 2u), last, L->code[r] ? L->code[r] : "",
-                              (uint8_t)RE_ST_NONE, RE_SCREEN_ZONE_NONE);
+        if (L->code && r < L->n_code && split + 2u < last) {
+            const char *line = L->code[r] ? L->code[r] : "";
+            if (L->syntax)
+                re_syntax_put(s, y, (uint16_t)(split + 2u), last, line);
+            else
+                re_screen_put_run(s, y, (uint16_t)(split + 2u), last, line, (uint8_t)RE_ST_NONE,
+                                  RE_SCREEN_ZONE_NONE);
+        }
     }
 }
 

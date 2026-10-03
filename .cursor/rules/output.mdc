@@ -1,0 +1,26 @@
+---
+description: JSON stdout contract, stderr diagnostics, and error codes
+alwaysApply: true
+---
+
+# Output contract
+
+stdout carries exactly one JSON object plus `\n`. Nothing else. In `mcp` mode, stdout is only newline-delimited JSON-RPC frames.
+
+stderr carries diagnostics. `re_log_*` is the only writer. It is silent in mcp mode and when `RE_LOG=0`.
+
+Errors in JSON mode go to stderr and use a nonzero exit:
+
+    {"schema":"antistrefo/1","error":{"code":1,"message":"..."}}
+
+Every response carries `"schema":"antistrefo/1"`. Collections carry `count` and `truncated` and accept `--offset` / `--limit`. Default limit is 200.
+
+| Code | Meaning |
+|---|---|
+| 0 | ok |
+| 1 | internal error, the fallback when no specific code applies |
+| 2 | usage error |
+| 3 | not a recognized binary |
+| 4 | malformed binary, or a read that ran past the end |
+| 5 | unsupported format or architecture |
+| 6 | I/O error or out of memory |

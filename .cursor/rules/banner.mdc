@@ -1,0 +1,24 @@
+---
+description: Four-line file banner and the single pragma once
+alwaysApply: true
+---
+
+# Banner
+
+Every file opens with exactly four comment lines. C uses `//`. Scripts and text use `#`. A `.py` shebang may occupy line 1; the banner then starts on line 2. `CMakePresets.json` and `LICENSE` have no banner.
+
+    // re_arena.h - bump allocator giving one malloc and one free per command.
+    // Module: util (C11).
+    // Owns: bump-pointer blocks, chunk list, reset and free.
+    // Depends: none. No I/O, no globals, thread-unsafe by design.
+
+Slots, in order:
+
+1. Basename, then one-line purpose. The gate requires the filename on this line.
+2. `Module: <name> (<language>).` including the period.
+3. `Owns: ...`
+4. `Depends: ...` and the architectural constraint on the same line.
+
+Keep each banner line under 100 columns. clang-format wraps a long line 3 or 4 onto line 5, and rule 2 then fails.
+
+`#pragma once` follows the banner in every header, exactly once.

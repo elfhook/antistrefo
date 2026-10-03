@@ -13,7 +13,9 @@
 
 #include "utils/mem/re_arena.h"
 #include "utils/text/re_strbuf.h"
+#include "utils/tui/re_layout.h"
 #include "utils/tui/re_screen.h"
+#include "utils/tui/re_syntax.h"
 #include "utils/tui/re_tui.h"
 #include "utils/tui/re_ui.h"
 
@@ -413,6 +415,69 @@ static void test_hover_and_click(re_arena_t *a) {
     RE_CHECK(!re_ui_click(&u, 2));
 }
 
+static void test_syntax_line(re_arena_t *a) {
+    re_strbuf_t out;
+    re_strbuf_init(&out, a);
+    re_screen_t s;
+    RE_CHECK(re_screen_init(&s, a, &out, 4, 64));
+    re_screen_clear(&s);
+    re_syntax_put(&s, 0, 0, 64, "    if (v1 == 0) goto L2");
+    RE_CHECK_EQ_STR(s.cell[4].g, "i");
+    RE_CHECK_EQ_U(s.cell[4].style, (unsigned)RE_ST_KW);
+    RE_CHECK_EQ_STR(s.cell[14].g, "0");
+    RE_CHECK_EQ_U(s.cell[14].style, (unsigned)RE_ST_NUM);
+    RE_CHECK_EQ_U(s.cell[17].style, (unsigned)RE_ST_KW);
+    RE_CHECK_EQ_U(s.cell[22].style, (unsigned)RE_ST_ACCENT);
+    re_screen_clear(&s);
+    re_syntax_put(&s, 0, 0, 64, "    uint64_t v3 = printf(v1);");
+    RE_CHECK_EQ_U(s.cell[4].style, (unsigned)RE_ST_TYPE);
+    RE_CHECK_EQ_STR(s.cell[18].g, "p");
+    RE_CHECK_EQ_U(s.cell[18].style, (unsigned)RE_ST_CALL);
+    re_screen_clear(&s);
+    re_syntax_put(&s, 0, 0, 64, "    /\x2f not a return");
+    RE_CHECK_EQ_U(s.cell[4].style, (unsigned)RE_ST_CMT);
+    RE_CHECK_EQ_U(s.cell[13].style, (unsigned)RE_ST_CMT);
+    re_screen_clear(&s);
+    re_syntax_put(&s, 0, 0, 64, "v = 0x1a;");
+    RE_CHECK_EQ_STR(s.cell[4].g, "0");
+    RE_CHECK_EQ_U(s.cell[4].style, (unsigned)RE_ST_NUM);
+    RE_CHECK_EQ_U(s.cell[7].style, (unsigned)RE_ST_NUM);
+    re_screen_clear(&s);
+    re_syntax_put(&s, 0, 0, 64, "name = \"hi\";");
+    RE_CHECK_EQ_U(s.cell[7].style, (unsigned)RE_ST_STR);
+    RE_CHECK_EQ_U(s.cell[8].style, (unsigned)RE_ST_STR);
+}
+
+static void test_syntax_pane(re_arena_t *a) {
+    static const char *code[] = {"  return 0;"};
+    static const char *rows[] = {"_main"};
+    re_strbuf_t out;
+    re_layout_t L;
+    re_screen_t s;
+    size_t i;
+    bool kw = false;
+    bool num = false;
+    re_strbuf_init(&out, a);
+    memset(&L, 0, sizeof(L));
+    L.rows = rows;
+    L.n_rows = 1;
+    L.code = code;
+    L.n_code = 1;
+    L.syntax = true;
+    L.left_w = 24;
+    L.list_title = "Functions";
+    RE_CHECK(re_screen_init(&s, a, &out, 12, 80));
+    re_layout_compose(&s, &L);
+    for (i = 0; i < (size_t)s.rows * s.cols; i++) {
+        if (s.cell[i].g[0] == 'r' && s.cell[i].style == (uint8_t)RE_ST_KW)
+            kw = true;
+        if (s.cell[i].g[0] == '0' && s.cell[i].style == (uint8_t)RE_ST_NUM)
+            num = true;
+    }
+    RE_CHECK(kw);
+    RE_CHECK(num);
+}
+
 int main(void) {
     re_arena_t a;
     re_arena_init(&a, 0);
@@ -427,6 +492,8 @@ int main(void) {
     test_fits_widths(&a);
     test_header(&a);
     test_hover_and_click(&a);
+    test_syntax_line(&a);
+    test_syntax_pane(&a);
     re_arena_free(&a);
     return re_test_report("tui");
 }

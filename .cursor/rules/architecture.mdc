@@ -1,0 +1,16 @@
+---
+description: C11 core versus C++ shell, bounded reads, and the command table
+alwaysApply: true
+---
+
+# Architecture
+
+`src/utils` and `src/features` are C11 with `extern "C"` headers, no exceptions, no RTTI. `src/cli` and `src/mcp` are C++17 and never reinterpret binary data themselves. They call `re_*` and render.
+
+Every byte of file data is read through `re_read` / `re_rd*`, which return failure or zero past the end. No raw pointer arithmetic into file data. Map the file with `CreateFileMapping` / `MapViewOfFile` (`mmap` under `#ifdef` for POSIX). Do not slurp the whole file.
+
+One command table of `{name, summary, args, entry, schema}` drives both argv parsing and MCP `tools/list`. Do not add a command on only one surface.
+
+Heavy dependencies sit behind an opaque vtable. `re_disasm` is that seam. Feature code never names a Capstone type. `RE_ENABLE_DISASM=OFF` drops the table. The built backend is the self-contained x86-64 decoder in `src/features/disasm/`.
+
+No Boost, no nlohmann/json, no other third-party C++ library. `re_jw` is the JSON emitter for the whole project.

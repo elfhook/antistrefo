@@ -1,0 +1,21 @@
+---
+description: antistrefo identity, prefixes, and locked coding conventions
+alwaysApply: true
+---
+
+# Project
+
+antistrefo is a static-analysis CLI and MCP server. No debugger, no persistent database.
+
+    antistrefo <command> [args]
+    antistrefo mcp
+
+The product name is antistrefo. C symbols stay `re_` and macros `RE_`. That prefix is a link-time guard against Capstone and zlib. Do not rename it to match the product.
+
+- Executable `antistrefo.exe`. JSON schema id `antistrefo/1`. License MIT.
+- Core is C11 (`src/utils`, `src/features`). Shell is C++17 (`src/cli`, `src/mcp`).
+- ASCII only in code: no smart quotes, em dashes, or arrows. Box drawing goes in as byte escapes (`"\xe2\x94\x80"`).
+- LF, one final newline, no trailing whitespace, no tabs. Indent 4 spaces. K&R braces. Column limit 100.
+- File cap 500 lines. Function body cap 60 lines and 4 nesting levels.
+- Names: `re_` prefix, `snake_case`, `_t` for types.
+- Canonical rulebook: `.rules/rules.md`. The gate is `scripts/check.py`.

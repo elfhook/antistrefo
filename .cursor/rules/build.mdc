@@ -1,0 +1,18 @@
+---
+description: MSVC toolchain, presets, and sanitizer limits on this machine
+alwaysApply: true
+---
+
+# Build
+
+Ship with MSVC `/MT /O2 /GL /LTCG`. MinGW is a dev fallback only. Presets in `CMakePresets.json`: `msvc-debug`, `msvc-release`.
+
+- MSVC 14.51.36231, VS 18 Community. Run `vcvarsall.bat x64` before a build.
+- Windows SDK 10.0.26100.0 / 10.0.28000.0. CMake 4.3.1, Ninja 1.13.2.
+- clang-format 20.1.8 and clang-tidy live in `VC/Tools/Llvm/x64/bin`. clang-tidy is advisory.
+- MSVC `/fsanitize=address` works. MinGW gcc 15.2.0 has no `libc.a` and no sanitizer runtime (`libubsan`, `libasan`). There is no UBSan. Defences are `/W4 /WX`, a clean MinGW `-Wall -Wextra -Werror` build, and the truncation sweep.
+- Absent on this machine: Rust, the clang compiler, vcpkg, pkg-config, WSL, and an ELF cross compiler.
+- CMake 4.x errors on `cmake_minimum_required` below 3.5. Keep `CMAKE_POLICY_VERSION_MINIMUM` at 3.5.
+- Do not use a hidden test preset that has no `configurePreset`. CMake reports that as `Invalid preset: "base"`.
+- CMake presets reject unknown root keys, so `CMakePresets.json` cannot carry a banner.
+- No ELF cross compiler. `scripts/gen_fixtures.py` must synthesize ELF. That is a prerequisite of the format fixtures, not optional.

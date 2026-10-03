@@ -211,6 +211,7 @@ static void compose(re_screen_t *s, gui_t *g, const re_gui_funcs_t *l) {
     L.n_code = g->body_n;
     L.base_line = g->body_base;
     L.marks = g->body_marks;
+    L.syntax = g->tab == 1;
     re_layout_compose(s, &L);
     g->button_zone = L.button_zone;
     g->open_zone = L.open_zone;

@@ -38,6 +38,12 @@ typedef enum {
     RE_ST_BAD,    // something wrong
     RE_ST_HOVER,  // light blue background: the pointer is over a control
     RE_ST_PRESS,  // dark blue background: the button is held down
+    RE_ST_KW,     // a keyword in pseudocode
+    RE_ST_TYPE,   // a type name in pseudocode
+    RE_ST_CMT,    // a comment in pseudocode
+    RE_ST_STR,    // a string literal in pseudocode
+    RE_ST_NUM,    // a number in pseudocode
+    RE_ST_CALL,   // a call target in pseudocode
 } re_style_t;
 
 typedef struct {

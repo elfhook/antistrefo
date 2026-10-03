@@ -1,0 +1,20 @@
+---
+description: Source tree, include paths, folder cap, and how tests must assert
+alwaysApply: true
+---
+
+# Layout
+
+Include root is `src/`. Use `#include "utils/mem/re_arena.h"` and `#include "features/pe/re_pe.h"`.
+
+- `src/utils/<cat>/` shared utilities: text, mem, algo, sys, json, tui
+- `src/features/<cat>/` one directory per analysis area
+- `src/cli/` argv dispatch and rendering. `src/mcp/` MCP stdio server
+- `tests/` CTest targets. `docs/util-catalog.md` is the util lookup; read it before new code
+- `Tools/` is reserved and not ours
+
+A folder under `src/` with more than 15 files must be split by category. The gate fails the build.
+
+Never generalise from one sample. Coverage, matching, performance, and robustness claims are checked against all five corpus files before they are reported.
+
+A test asserts content, not only counts. Where the correct value is knowable, pin it. Where a bug can be reintroduced to prove the test catches it, do that before trusting the test.

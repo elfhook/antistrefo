@@ -1,0 +1,31 @@
+---
+description: Pre-commit gate rules 0-10 and the narrow exceptions
+alwaysApply: true
+---
+
+# Gate
+
+Run this before claiming anything works. The style test fails the build.
+
+    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\format.ps1
+    python scripts\check.py .
+    cmake --build --preset msvc-release
+    ctest --preset msvc-release
+
+| Rule | Requirement |
+|---|---|
+| 0 | Read the util catalog first. No `realloc` (use `re_strbuf` / `re_vec`). No `x &= x - 1` (use `re_bits`) |
+| 1 | 500 lines per file. 60-line function bodies. Nesting <= 4 |
+| 2 | 4-line banner. Folder <= 15 files under `src/` |
+| 3 | Exactly one `#pragma once` per header |
+| 4 | ASCII-only source bytes. `.md` is exempt |
+| 5 | LF, one final newline, no trailing whitespace, no tabs |
+| 6 | No `malloc` / `calloc` / `realloc` / `free` / `strdup` outside `src/utils`. Use `re_arena` |
+| 7 | No `printf` / `puts` / `fprintf(stdout)` outside `re_jw*` / `re_text*` |
+| 8 | No `strlen` / `strcmp` / `strcpy` / `strcat` / `sprintf` / `strtok` and kin. Use `re_str` / `re_strbuf`. `memcpy` / `memset` / `memcmp` on sized spans are fine |
+| 9 | `re_` prefix (clang-tidy, advisory) |
+| 10 | clang-format clean |
+
+`tests/` is exempt from rules 7 and 8 only. `re_regex_priv.h` and `re_util.h` stay out of the aggregator and must still appear in the util catalog. `RE_VEC_PUSH` needs an lvalue; assign `f(x)` to a local first.
+
+Every new header under `src/utils/` must appear in both `docs/util-catalog.md` and `src/utils/re_util.h`, except those two private headers.
