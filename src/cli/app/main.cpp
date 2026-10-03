@@ -168,12 +168,15 @@ int main(int argc, char **argv) {
     Utf8Console console(!mcp_mode);
 
     if (argc < 2) {
-        // No arguments means a person opened the binary, most likely by double
-        // clicking it, so a terminal gets the shell and stays there. Anything else is
-        // something automated asking what this is, and it must get usage and an exit
-        // rather than a prompt nobody is going to answer.
+        // No arguments means a person opened the binary, most likely by double clicking
+        // it or by typing its name. That gets the full screen view, which opens on its
+        // welcome screen and asks for a file, because that is the thing a person who
+        // has just started the tool wants to see.
+        //
+        // Anything else is something automated asking what this is, and it must get
+        // usage and an exit rather than a view it cannot drive.
         if (re_shell_wanted(argc))
-            return run_shell();
+            return re_cmd_gui(nullptr, "", 0, argv);
         print_usage();
         return re_err_exit_code(RE_E_USAGE);
     }

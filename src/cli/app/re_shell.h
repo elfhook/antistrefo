@@ -1,4 +1,4 @@
-// re_shell.h - the interactive mode entered when the tool is run with no arguments.
+// re_shell.h - the line oriented shell, reachable as a command.
 // Module: cli (C11).
 // Owns: the prompt loop, and remembering the file being looked at.
 // Depends: re_table, re_report, re_tui, re_cmds. Dispatches through the same command
@@ -15,9 +15,13 @@ extern "C" {
 #endif
 #include "cli/app/re_table.h"
 
-// True when the shell should run: no arguments, and stdin and stdout are both
-// terminals. A caller that passes arguments never gets here.
+// True when a terminal is on both ends. The shell reads keystrokes and writes frames,
+// and it must refuse rather than sit there waiting inside a pipe.
 bool re_shell_wanted(int argc);
+
+// The shell as a command, so it stays reachable now that a bare invocation opens the
+// view. Reports a terminal-less environment rather than waiting in one.
+int re_cmd_shell(re_ctx_t *ctx, const char *path, int argc, char **argv);
 
 // Run the loop. Returns 0 on a clean exit, which is the only way it returns: an error
 // inside a command is reported and the loop continues, because losing a whole session

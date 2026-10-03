@@ -243,6 +243,17 @@ static int run(re_ctx_t *ctx, re_report_t *r, line_t *l, const char **current, s
     return 0;
 }
 
+int re_cmd_shell(re_ctx_t *ctx, const char *path, int argc, char **argv) {
+    (void)path;
+    (void)argc;
+    (void)argv;
+    if (!re_shell_wanted(1)) {
+        fprintf(stderr, "shell needs a terminal on both ends\n");
+        return 2;
+    }
+    return re_shell_run(ctx);
+}
+
 int re_shell_run(re_ctx_t *ctx) {
     char line[SHELL_LINE_MAX];
     re_report_t r;
