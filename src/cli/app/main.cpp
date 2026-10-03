@@ -15,6 +15,7 @@
 #include "cli/app/re_shell.h"
 #include "cli/app/re_table.h"
 #include "cli/cmds/re_cmds.h"
+#include "cli/screen/re_gui.h"
 #include "mcp/re_mcp.h"
 
 namespace {
@@ -132,7 +133,11 @@ int run_one(const re_cmd_t *cmd, int argc, char **argv) {
         return report_error(err);
     }
     const char *path = first < (argc - 2) ? argv[2 + first] : nullptr;
-    if (!path) {
+    // Only a command that needs a file insists on one. The full screen view does not:
+    // opening the binary with nothing named is the case its welcome screen exists for,
+    // and refusing here would make that screen unreachable from the one place a person
+    // is most likely to be.
+    if (!path && cmd->needs_path) {
         re_arena_free(&arena);
         RE_ERR_SETF(&err, RE_E_USAGE, "%s needs a file, usage: %s", cmd->name, cmd->usage);
         return report_error(err);
@@ -172,6 +177,18 @@ int main(int argc, char **argv) {
         print_usage();
         return re_err_exit_code(RE_E_USAGE);
     }
+
+    // Dropping a file onto this executable is how a Windows shell starts a program
+    // with a file: the dropped path arrives as the only argument. That is a person
+    // pointing at a binary and expecting it opened, so it goes straight to the full
+    // screen view. A name that is already a command never reaches this, because the
+    // lookup would have found it, so the two cannot be confused, and a name that is
+    // neither is still an unknown command.
+    if (!re_cmd_find(argv[1]) && argc == 2 && re_gui_wants_file(argv[1])) {
+        char *dropped[] = {argv[0], const_cast<char *>("gui"), argv[1]};
+        return re_cmd_gui(nullptr, dropped[2], 3, dropped);
+    }
+
     const re_cmd_t *cmd = re_cmd_find(argv[1]);
     if (!cmd) {
         re_err_t err{};

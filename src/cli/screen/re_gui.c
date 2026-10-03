@@ -10,10 +10,12 @@
 #include "features/code/re_code.h"
 #include "features/code/re_stack.h"
 #include "features/dec/re_decompile.h"
+#include "utils/mem/re_buf.h"
 #include "utils/tui/re_layout.h"
 #include "utils/tui/re_screen.h"
 #include "cli/screen/re_draw.h"
 #include "cli/screen/re_focus.h"
+#include "cli/screen/re_gui_model.h"
 #include "cli/screen/re_input.h"
 #include "cli/screen/re_pseudocode.h"
 #include "cli/screen/re_term.h"
@@ -23,9 +25,7 @@
 
 // How much a listing holds at once. Bounded rather than sized to the file, because a
 // pane has a fixed number of rows and a function can be longer than any of them.
-#define CODE_MAX 48u
-#define LIST_MAX 256u
-#define LIST_ROWS 24u
+#define LIST_ROWS RE_GUI_LIST_ROWS
 
 // The panes that exist. Two, not five: a tab that opens onto "not in this build" is a
 // promise the tool does not keep, so the strip grows when the panes do.
@@ -40,6 +40,16 @@ typedef struct {
     size_t tab; // 0 disassembly, 1 pseudocode
     bool mouse; // mouse reporting is on, so the status may say "click"
     bool quit;
+    bool want_load;  // the load control was activated
+    bool loaded;     // a file is open, so the body is the file view
+    bool fana_ready; // the analysis arena holds a mapping
+    uint8_t button_zone;
+    // The analysis gets its own arena, freed and remade on every load, because a mapped
+    // binary is arena memory and a session that opened twenty of them would run out.
+    // The path is copied rather than borrowed for the same reason: the analysis arena
+    // goes away on a reload, and the title still has to name what is loaded.
+    re_arena_t fana;
+    char path[512];
     // What the right pane shows, decided once per turn by the active tab and filled in
     // by whichever pass produced it. Keeping it here rather than in compose is what
     // lets the layout stay ignorant of where its text came from.
@@ -49,18 +59,6 @@ typedef struct {
     uint32_t body_base;
     const char *body_note;
 } gui_t;
-
-// The listing for the selected function, rebuilt each frame. The buffers live in the
-// arena and are reused, so a frame costs no allocation and the pointer array handed to
-// the widget stays valid for exactly as long as the frame does.
-typedef struct {
-    re_strbuf_t line[CODE_MAX];
-    const char *text[CODE_MAX];
-    uint8_t mark[CODE_MAX];
-    size_t n;
-    uint32_t base;
-    size_t vis;
-} listing_t;
 
 // The decompiled body, kept across turns. Decompiling walks and lowers the whole
 // function, so doing it on every frame would be doing the same work sixty times a
@@ -76,80 +74,9 @@ typedef struct {
     bool ok;
 } pseudo_t;
 
-typedef struct {
-    char *name[LIST_MAX];
-    char addr[LIST_MAX][20];
-    size_t n;
-    size_t vis;
-} funcs_t;
-
-static void funcs_fill(funcs_t *l, re_arena_t *a, const re_analysis_t *an) {
-    l->n = 0;
-    size_t total = RE_VEC_LEN(&an->scan.funcs);
-    for (size_t i = 0; i < total && l->n < LIST_MAX; i++) {
-        const re_func_t *f = RE_VEC_PTR(&an->scan.funcs, re_func_t, i);
-        re_strbuf_t sb;
-        re_strbuf_init(&sb, a);
-        re_strbuf_put_hex64(&sb, f->va, 16);
-        re_strbuf_putc(&sb, 0);
-        size_t n = sb.len < 19u ? sb.len : 19u;
-        for (size_t k = 0; k < n; k++)
-            l->addr[l->n][k] = sb.p[k];
-        l->addr[l->n][n] = '\0';
-        // A function with no name has one invented from its address, so the list never
-        // shows a blank row that cannot be told apart from any other blank row.
-        re_strbuf_t fb;
-        re_strbuf_init(&fb, a);
-        re_strbuf_puts(&fb, "sub_");
-        re_strbuf_put_hex64(&fb, f->va, 16);
-        re_strbuf_putc(&fb, 0);
-        const char *nm = (f->name.p && f->name.n) ? f->name.p : fb.p;
-        l->name[l->n] = re_arena_strdup(a, nm);
-        l->n++;
-    }
-    l->vis = LIST_ROWS;
-    if (l->vis > l->n)
-        l->vis = l->n;
-}
-
-// Decode the selected function into text, using the shared decoder and the shared
-// renderer. This is the same pair the disasm command uses, so what the view shows and
-// what a report says about the same address cannot disagree.
-static void listing_fill(listing_t *ls, re_arena_t *a, const re_analysis_t *an, size_t sel,
-                         size_t vis) {
-    ls->n = 0;
-    ls->base = 0;
-    for (size_t i = 0; i < CODE_MAX; i++)
-        re_strbuf_init(&ls->line[i], a);
-    if (sel >= RE_VEC_LEN(&an->scan.funcs))
-        return;
-    const re_func_t *f = RE_VEC_PTR(&an->scan.funcs, re_func_t, sel);
-    ls->base = (uint32_t)f->va;
-    if (!an->code.dis)
-        return;
-    uint64_t end = f->va + (f->size ? f->size : 1u);
-    for (uint64_t va = f->va; va < end && ls->n < CODE_MAX;) {
-        re_insn_t in;
-        if (!re_code_insn(&an->code, va, &in))
-            break;
-        re_strbuf_clear(&ls->line[ls->n]);
-        an->code.dis->render(an->code.dis->ctx, &in, a, &ls->line[ls->n]);
-        // A line the reader can act on gets a mark: a branch is where the flow goes,
-        // and that is the one thing worth noticing without reading every line.
-        ls->mark[ls->n] = (uint8_t)(in.is_call || in.is_branch);
-        ls->text[ls->n] = ls->line[ls->n].p ? ls->line[ls->n].p : "";
-        ls->n++;
-        if (!in.size)
-            break; // a zero length instruction would loop for ever
-        va += in.size;
-    }
-    (void)vis;
-}
-
-// The window of function names the list shows, kept centred on the selection so the
-// Split the emitted body into lines. The buffer is left intact and the lines are
-// pointers into it, so this is a walk rather than a copy, and the pointers stay valid
-// until the next build of the same function.
+// Split the emitted body into lines. The buffer is left intact apart from the line
+// endings, which become terminators, so the pointers are C strings and the grid never
+// sees a newline inside a cell.
 static void pseudo_split(pseudo_t *ps) {
     re_strbuf_putc(&ps->buf, 0);
     ps->n = re_pseudo_split(ps->buf.p, ps->line, ps->mark, RE_PSEUDO_MAX);
@@ -193,53 +120,61 @@ static void pseudo_fill(pseudo_t *ps, re_arena_t *a, re_analysis_t *an, size_t s
 
 // The right pane's content for the active tab. The disassembly is rebuilt every turn
 // because it is cheap and should follow the selection exactly; the pseudocode is not,
-// and saying so is why the two take different paths.
-static void body_for(gui_t *g, re_arena_t *a, listing_t *ls, pseudo_t *ps, size_t sel) {
+// which is why the two take different paths.
+static void body_for(gui_t *g, re_arena_t *a, re_gui_listing_t *ls, pseudo_t *ps, size_t sel) {
     if (g->tab == 1) {
         pseudo_fill(ps, a, &g->an, sel);
         g->body = ps->line;
         g->body_marks = ps->mark;
         g->body_n = ps->n;
         g->body_base = 0;
-        g->body_note = NULL;
         return;
     }
-    listing_fill(ls, a, &g->an, sel, ls->vis);
+    re_gui_listing_fill(ls, a, &g->an, sel);
     g->body = ls->text;
     g->body_marks = ls->mark;
     g->body_n = ls->n;
     g->body_base = ls->base;
-    g->body_note = NULL;
 }
 
-static void funcs_window(const gui_t *g, const funcs_t *l, const char **rows) {
-    size_t half = l->vis > 2u ? l->vis / 2u : 0u;
-    for (size_t i = 0; i < l->vis; i++) {
-        size_t idx = (g->sel >= half ? g->sel - half : 0u) + i;
-        if (l->n && idx >= l->n)
-            idx = l->n - 1u;
-        rows[i] = l->n ? l->name[idx] : "(no functions)";
-    }
-}
-static void compose(re_screen_t *s, gui_t *g, const funcs_t *l) {
+static void compose(re_screen_t *s, gui_t *g, const re_gui_funcs_t *l) {
     static const char *kTabs[RE_TAB_COUNT] = {"Disasm", "Pseudocode"};
     static const char *kToolbar[] = {"Open", "Save", "Graph", "Strngs", "Xrefs", "Help"};
     static const char *kLegend[] = {"code", "branch", "gap", "selected"};
 
+    re_layout_t L = {0};
+    L.toolbar = kToolbar;
+    L.n_toolbar = 6;
+    L.legend = kLegend;
+    L.n_legend = 4;
+    L.left_w = 30;
+    g->button_zone = RE_SCREEN_ZONE_NONE;
+
+    if (!g->loaded) {
+        // The first screen. No list, no panes, no empty function table: a pane drawn
+        // with nothing in it reads as a file that has no functions, which is a
+        // different and wrong claim.
+        L.file = "antistrefo";
+        L.welcome = "load a file here";
+        L.button = "Load";
+        L.status = "no file";
+        L.caret =
+            g->mouse ? "click Load, or drop a file on this window" : "press Enter to load a file";
+        re_layout_compose(s, &L);
+        g->button_zone = L.button_zone;
+        re_focus_build(&g->focus, s);
+        return;
+    }
+
     const char *lrows[LIST_ROWS];
-    funcs_window(g, l, lrows);
+    re_gui_funcs_window(g->sel, l, lrows, LIST_ROWS);
 
     char status[80];
     snprintf(status, sizeof(status), "%u functions", (unsigned)l->n);
 
-    re_layout_t L = {0};
-    L.file = g->an.path.p ? g->an.path.p : "antistrefo";
-    L.toolbar = kToolbar;
-    L.n_toolbar = 6;
+    L.file = g->path;
     L.nav_pos = g->sel;
     L.nav_total = l->n;
-    L.legend = kLegend;
-    L.n_legend = 4;
     L.list_title = "Functions";
     L.list_head = "Name";
     L.rows = lrows;
@@ -256,9 +191,76 @@ static void compose(re_screen_t *s, gui_t *g, const funcs_t *l) {
     L.scroll_total = g->body_n ? g->body_n : 1u;
     L.status = status;
     L.caret = g->mouse ? "click or Tab; Enter opens; q quits" : "arrows move; q quits";
-    L.left_w = 30;
     re_layout_compose(s, &L);
     re_focus_build(&g->focus, s);
+}
+// Open a file into the session, replacing whatever was there. The analysis arena is
+// remade rather than grown into: a mapped binary is arena memory, and a session that
+// loaded twenty of them would exhaust one arena instead of saying so.
+static bool load_file(gui_t *g, re_arena_t *a, re_gui_funcs_t *list, pseudo_t *ps,
+                      const char *path) {
+    if (g->fana_ready) {
+        re_analysis_close(&g->an);
+        g->fana_ready = false;
+    }
+    re_arena_free(&g->fana);
+    re_arena_init(&g->fana, 1u << 23);
+    if (!re_analysis_open(&g->an, &g->fana, path)) {
+        // Keep whatever was open. Failing a load must not cost the reader the file they
+        // were already reading, which is the one thing they cannot get back.
+        return false;
+    }
+    g->fana_ready = true;
+    size_t n = 0;
+    while (path[n] && n + 1u < sizeof(g->path)) {
+        g->path[n] = path[n];
+        n++;
+    }
+    g->path[n] = '\0';
+    g->loaded = true;
+    g->sel = 0;
+    g->tab = 0;
+    // The caches are keyed on the function index, and the function list is a different
+    // list now, so both have to be told the old answers no longer apply.
+    ps->built_for = (size_t)-1;
+    list->n = 0;
+    re_gui_funcs_fill(list, a, &g->an);
+    return true;
+}
+
+// The prompt. It steps out of the full screen and back to cooked input, because a
+// question asked with the cursor hidden and echo off is a question asked badly. This
+// is the same affordance the shell's "open" gives, deliberately: one way to name a file
+// in this tool, not two that drift apart.
+static bool prompt_path(gui_t *g, char *out, size_t cap) {
+    static const char kAsk[] = "\n  load a file (empty to go back): ";
+    static const char kDone[] = "\n";
+    re_term_pause(&g->term);
+    // Written through the terminal layer rather than to stdout directly, so the one
+    // path bytes take to a terminal is the one the rest of the front end uses.
+    re_term_write(&g->term, kAsk, sizeof(kAsk) - 1u);
+    char line[512];
+    bool got = fgets(line, (int)cap, stdin) != NULL;
+    re_term_write(&g->term, kDone, sizeof(kDone) - 1u);
+    re_term_resume(&g->term);
+    if (!got)
+        return false;
+    size_t n = 0;
+    while (line[n] && line[n] != '\n' && line[n] != '\r')
+        n++;
+    line[n] = '\0';
+    // Trim the surrounding spaces a pasted path usually carries. A path that legitimately
+    // ends in one is not a thing anybody means to type.
+    while (n && (line[0] == ' ')) {
+        for (size_t i = 0; i + 1 < n; i++)
+            line[i] = line[i + 1];
+        n--;
+        line[n] = '\0';
+    }
+    for (size_t i = 0; i < n; i++)
+        out[i] = line[i];
+    out[n] = '\0';
+    return n > 0;
 }
 
 static void apply(gui_t *g, const re_ev_t *ev) {
@@ -267,7 +269,15 @@ static void apply(gui_t *g, const re_ev_t *ev) {
             case 'q':
             case 'Q':
             case RE_KEY_ESCAPE:
+                // Before a file is open, leaving is still what Escape should do. The
+                // button is reached with Enter and Tab, so nothing is lost.
                 g->quit = true;
+                return;
+            case RE_KEY_ENTER:
+            case 'l':
+            case 'L':
+                if (!g->loaded)
+                    g->want_load = true;
                 return;
             case RE_KEY_UP:
                 if (g->sel)
@@ -311,8 +321,8 @@ static void apply(gui_t *g, const re_ev_t *ev) {
 }
 
 // One turn of the loop: compose, paint, wait. Returns false to leave.
-static bool turn(gui_t *g, re_arena_t *a, re_screen_t *frame, funcs_t *list, listing_t *ls,
-                 pseudo_t *ps) {
+static bool turn(gui_t *g, re_arena_t *a, re_screen_t *frame, re_gui_funcs_t *list,
+                 re_gui_listing_t *ls, pseudo_t *ps) {
     if (list->n && g->sel >= list->n)
         g->sel = list->n - 1u;
     body_for(g, a, ls, ps, g->sel);
@@ -346,18 +356,40 @@ static bool turn(gui_t *g, re_arena_t *a, re_screen_t *frame, funcs_t *list, lis
     return !g->quit;
 }
 
+bool re_gui_wants_file(const char *arg) {
+    if (!arg || !*arg)
+        return false;
+    // Something readable is there, not something with a known extension. A dropped
+    // binary may be named anything, and refusing one over its extension would be
+    // refusing the only thing the reader asked for.
+    //
+    // The file is read and thrown away, so opening it again costs one more read. That
+    // is cheaper than a wrong answer: without a check, a mistyped command would open
+    // this instead of saying the command does not exist.
+    re_arena_t a;
+    re_arena_init(&a, 0);
+    re_file_t f;
+    bool ok = re_file_open(arg, &a, &f) == RE_OK;
+    re_arena_free(&a);
+    return ok;
+}
+
 int re_cmd_gui(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     (void)argc;
     (void)argv;
     (void)ctx;
-    if (!path || !*path) {
-        fprintf(stderr, "gui needs a file\n");
-        return 2;
-    }
+    // No file is not an error. Opening the binary with nothing named is the case the
+    // welcome screen exists for, so the path is optional and its absence is the state.
     gui_t g;
     memset(&g, 0, sizeof(g));
     re_arena_t arena;
     re_arena_init(&arena, 1u << 23);
+    re_gui_funcs_t list;
+    memset(&list, 0, sizeof(list));
+    re_gui_listing_t ls;
+    memset(&ls, 0, sizeof(ls));
+    pseudo_t ps;
+    memset(&ps, 0, sizeof(ps));
 
     // The terminal is taken before the file is analysed. The other order puts a full
     // screen session up and then prints a failure into it, which leaves the reader with
@@ -369,26 +401,28 @@ int re_cmd_gui(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     }
     g.mouse = re_term_has_mouse(&g.term);
 
-    bool ready = re_analysis_open(&g.an, &arena, path);
+    // A named file is loaded now. Without one the first screen is the welcome, which is
+    // what opening the binary by double clicking it should produce, so this is not a
+    // different code path: it is the same one with nothing to load yet.
+    bool ready = !*path || load_file(&g, &arena, &list, &ps, path);
     uint16_t rows = 24, cols = 80;
     re_term_size(&rows, &cols);
     bool have_draw = re_draw_init(&g.draw, &arena, rows, cols);
     re_screen_t frame;
     bool have_frame = re_screen_init(&frame, &arena, &g.draw.out, rows, cols);
     re_focus_init(&g.focus);
-    funcs_t list;
-    memset(&list, 0, sizeof(list));
-    listing_t ls;
-    memset(&ls, 0, sizeof(ls));
-    pseudo_t ps;
-    memset(&ps, 0, sizeof(ps));
-    if (ready && have_draw && have_frame) {
-        funcs_fill(&list, &arena, &g.an);
-        while (turn(&g, &arena, &frame, &list, &ls, &ps))
-            ;
+    if (have_draw && have_frame) {
+        while (turn(&g, &arena, &frame, &list, &ls, &ps)) {
+            if (g.want_load) {
+                char typed[512];
+                g.want_load = false;
+                if (prompt_path(&g, typed, sizeof(typed)))
+                    load_file(&g, &arena, &list, &ps, typed);
+            }
+        }
     }
     re_term_close(&g.term);
-    if (ready)
+    if (g.fana_ready)
         re_analysis_close(&g.an);
     re_arena_free(&arena);
     return ready ? 0 : 2;

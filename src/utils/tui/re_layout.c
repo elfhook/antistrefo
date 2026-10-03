@@ -76,8 +76,61 @@ static void draw_right(re_screen_t *s, const re_layout_t *L, uint16_t y, uint16_
     re_screen_vscroll(s, code_y, (uint16_t)(screen_w - 1u), code_h, (uint16_t)L->scroll_pos,
                       (uint16_t)L->scroll_total);
 }
+// A button: the label in brackets, with the padding drawn after the closing bracket so
+// the whole thing carries one zone. The brackets are drawn last and belong to the zone,
+// which is what makes a click on one a click on the button rather than on the space
+// beside it.
+static void draw_button(re_screen_t *s, uint16_t y, uint16_t x, const char *label, uint8_t style,
+                        uint8_t zone) {
+    re_screen_put(s, y, x, "[", style, zone);
+    re_screen_put_run(s, y, (uint16_t)(x + 1u), (uint16_t)(x + 1u + RE_TUI_MIN_WIDTH), label, style,
+                      zone);
+    size_t n = re_tui_cols(label);
+    re_screen_put(s, y, (uint16_t)(x + 1u + n), "]", style, zone);
+    re_screen_fill(s, y, (uint16_t)(x + 2u + n), 1, 1, " ", style, zone);
+}
 
-uint16_t re_layout_compose(re_screen_t *s, const re_layout_t *L) {
+// The body before a file is open: one framed box, the message, and the one control
+// that does anything.
+//
+// Both are placed by a single helper rather than by arithmetic at each call site, so
+// there is one answer to "where does a centred run start" and it is checkable on its
+// own. A box this size has one thing in it and no need to scan, so a fixed indent would
+// do; centring is because a lone control under a lone line reads as a question, and a
+// question wants to be in the middle.
+static void centred(re_screen_t *s, uint16_t y, uint16_t width, const char *text, uint8_t style,
+                    uint8_t zone) {
+    size_t n = re_tui_cols(text);
+    if (!n || n + 2u >= width)
+        return;
+    uint16_t x = (uint16_t)(1u + (width - n) / 2u);
+    re_screen_put_run(s, y, x, (uint16_t)(1u + width), text, style, zone);
+}
+
+static uint16_t draw_welcome(re_screen_t *s, re_layout_t *L, uint16_t y, uint16_t h, uint16_t w) {
+    if (h < 5u || w < 24u)
+        return 0;
+    re_screen_box(s, y, 0, w, h, "Get started", (uint8_t)RE_ST_NONE);
+    uint16_t inner_w = (uint16_t)(w - 2u);
+    centred(s, (uint16_t)(y + 2u), inner_w, L->welcome ? L->welcome : "", (uint8_t)RE_ST_NONE,
+            RE_SCREEN_ZONE_NONE);
+
+    const char *label = L->button ? L->button : "Load";
+    size_t bc = re_tui_cols(label) + 3u;
+    char btn[32];
+    size_t k = 0;
+    btn[k++] = '[';
+    for (size_t i = 0; label[i] && k + 2u < sizeof(btn); i++)
+        btn[k++] = label[i];
+    btn[k++] = ']';
+    btn[k] = '\0';
+    L->button_zone = re_screen_zone(s);
+    centred(s, (uint16_t)(y + 4u), inner_w, btn, (uint8_t)RE_ST_ACCENT, L->button_zone);
+    (void)bc;
+    return h;
+}
+
+uint16_t re_layout_compose(re_screen_t *s, re_layout_t *L) {
     if (!s->cell || !L)
         return 0;
     if (s->rows < BAND_BODY + 2u) {
@@ -110,6 +163,14 @@ uint16_t re_layout_compose(re_screen_t *s, const re_layout_t *L) {
         return 0;
 
     uint16_t left_w = left_width(w, L->left_w);
+    if (L->welcome) {
+        // No file yet: one box, and none of the panes. The button's zone is recorded so
+        // a click on it can be told from a click anywhere else.
+        L->button_zone = RE_SCREEN_ZONE_NONE;
+        draw_welcome(s, L, body_y, body_h, w);
+        re_screen_status(s, (uint16_t)(s->rows - H_STATUS), 0, w, L->status, L->caret);
+        return body_h;
+    }
     if (left_w + 2u >= w)
         left_w = (uint16_t)((w > 4u) ? w / 3u : 0u);
     draw_left(s, L, body_y, body_h, left_w);

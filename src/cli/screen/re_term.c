@@ -98,6 +98,7 @@ bool re_term_open(re_term_t *t, bool want_mouse) {
     emit(SEQ_CUR_HIDE);
     emit(SEQ_CLEAR);
     t->alt_screen = true;
+    t->want_mouse = want_mouse;
     if (want_mouse) {
         emit(SEQ_MOUSE_ON);
         t->mouse = true;
@@ -147,6 +148,28 @@ void re_term_close(re_term_t *t) {
     re_term_finish(t);
     raw_off(t);
     t->open = false;
+}
+
+void re_term_pause(re_term_t *t) {
+    re_term_finish(t);
+    raw_off(t);
+    t->open = false;
+}
+
+bool re_term_resume(re_term_t *t) {
+    if (!raw_on(t))
+        return false;
+    emit(SEQ_ALT_ON);
+    emit(SEQ_CUR_HIDE);
+    emit(SEQ_CLEAR);
+    t->alt_screen = true;
+    t->open = true;
+    if (t->want_mouse) {
+        emit(SEQ_MOUSE_ON);
+        t->mouse = true;
+    }
+    fflush(stdout);
+    return true;
 }
 
 void re_term_size(uint16_t *rows, uint16_t *cols) {

@@ -18,6 +18,13 @@ extern "C" {
 // sequences in someone's log.
 int re_cmd_gui(re_ctx_t *ctx, const char *path, int argc, char **argv);
 
+// True when this argument looks like a file rather than a command name, which is what
+// tells a dropped file apart from a mistyped command. The test is that something is
+// there and readable, not that it has a known extension: a dropped binary may have any
+// name at all, and refusing one because of its extension would be refusing to do the
+// only thing the reader asked for.
+bool re_gui_wants_file(const char *arg);
+
 #ifdef __cplusplus
 }
 #endif

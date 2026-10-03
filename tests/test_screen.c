@@ -192,13 +192,16 @@ typedef struct {
 } arr_t;
 
 // Shared fixture, so the two arrangement tests read as assertions about a layout
-// rather than as setup.
+// rather than as setup. The struct is zeroed first: re_layout_t is large and a caller
+// that sets most of it must still zero it, because a field left uninitialised is
+// decided by whatever was on the stack.
 static void arr_build(re_arena_t *a, arr_t *f) {
     static const char *tabs[] = {"Disasm-A", "Pseudocode-A", "Hex-1"};
     static const char *rows[] = {"_fun", "_main", "_printf"};
     static const char *code[] = {"int main(void)", "{", "  return 0;", "}"};
     static const uint8_t marks[] = {0, 0, 1, 0};
 
+    memset(f, 0, sizeof(*f));
     re_strbuf_init(&f->out, a);
     re_strbuf_init(&f->dump, a);
     f->L.file = "lo_world.i64";
@@ -264,6 +267,88 @@ static void test_layout_narrow(re_arena_t *a) {
     re_screen_dump(&s, &f.dump);
     RE_CHECK(strstr(f.dump.p, "Pseudocode-A") != NULL);
     RE_CHECK(strstr(f.dump.p, "return 0;") != NULL);
+}
+
+// The welcome fixture. Built separately because two tests want it and a fixture that
+// is only written down once cannot drift out of step with what it is supposed to be.
+static void welcome_build(re_arena_t *a, arr_t *f) {
+    arr_build(a, f);
+    f->L.file = "antistrefo";
+    f->L.welcome = "load a file here";
+    f->L.button = "Load";
+    f->L.status = "no file";
+    f->L.caret = "press Enter to load a file";
+}
+
+// The welcome screen: one framed box, the message, and one control. No list and no
+// code pane, because a pane drawn with nothing in it reads as a file with no functions,
+// which is a different and wrong claim.
+static void test_welcome(re_arena_t *a) {
+    arr_t f;
+    re_screen_t s;
+    welcome_build(a, &f);
+    RE_CHECK(re_screen_init(&s, a, &f.out, 20, 70));
+    RE_CHECK(re_layout_compose(&s, &f.L) > 8);
+    RE_CHECK(f.L.button_zone != RE_SCREEN_ZONE_NONE);
+    re_screen_dump(&s, &f.dump);
+
+    RE_CHECK(strstr(f.dump.p, "Get started") != NULL);
+    RE_CHECK(strstr(f.dump.p, "load a file here") != NULL);
+    RE_CHECK(strstr(f.dump.p, "[Load]") != NULL);
+    // The parts of the file view must be absent, not present and empty. Asserted on the
+    // list heading rather than on a tab name, because in this fixture the legend is
+    // built from the tab labels and would match either way.
+    RE_CHECK(strstr(f.dump.p, "Functions") == NULL);
+    RE_CHECK(strstr(f.dump.p, "Function name") == NULL);
+
+    // The whole of the button, brackets included, carries one zone, and the cells that
+    // carry it spell exactly the label: a click on a bracket is a click on the button
+    // rather than on the space beside it.
+    char spelled[16] = {0};
+    size_t w = 0;
+    for (uint16_t y = 0; y < s.rows; y++) {
+        for (uint16_t x = 0; x < s.cols; x++) {
+            const re_cell_t *c = &s.cell[(size_t)y * s.cols + x];
+            if (c->zone != f.L.button_zone || !c->g[0])
+                continue;
+            for (size_t k = 0; c->g[k] && w + 1 < sizeof(spelled); k++)
+                spelled[w++] = c->g[k];
+        }
+    }
+    RE_CHECK(strcmp(spelled, "[Load]") == 0);
+}
+
+// The button and the message are centred, not left aligned in the box. The dump now
+// reports interior blanks as spaces, so a position can be asserted on at all: before
+// that it collapsed every gap and each column read as column one.
+static void test_welcome_centred(re_arena_t *a) {
+    arr_t f;
+    re_screen_t s;
+    welcome_build(a, &f);
+    RE_CHECK(re_screen_init(&s, a, &f.out, 20, 70));
+    RE_CHECK(re_layout_compose(&s, &f.L) > 8);
+
+    uint16_t quarter = (uint16_t)(s.cols / 4u);
+    uint16_t first_x = 0;
+    for (uint16_t x = 0; x < s.cols; x++) {
+        if (s.cell[(size_t)9 * s.cols + x].zone == f.L.button_zone) {
+            first_x = x;
+            break;
+        }
+    }
+    RE_CHECK(first_x > quarter);
+    RE_CHECK(first_x < (uint16_t)(s.cols - quarter - 6u));
+
+    uint16_t msg_x = 0;
+    for (uint16_t x = 0; x < s.cols; x++) {
+        const re_cell_t *c = &s.cell[(size_t)7 * s.cols + x];
+        if (c->g[0] && c->g[0] != '|') {
+            msg_x = x;
+            break;
+        }
+    }
+    RE_CHECK(msg_x > quarter);
+    RE_CHECK(msg_x < (uint16_t)(s.cols - quarter - 16u));
 }
 
 // A screen too short for the arrangement says the subject and stops, rather than
@@ -332,6 +417,8 @@ int main(int argc, char **argv) {
     test_layout_bands(&a);
     test_layout_narrow(&a);
     test_layout_refuses_tiny_screen(&a);
+    test_welcome(&a);
+    test_welcome_centred(&a);
     test_draw_matches_dump(&a);
     re_arena_free(&a);
     return re_test_report("screen");

@@ -19,6 +19,7 @@ typedef struct {
     bool mouse;      // mouse reporting was turned on and is believed to be on
     bool alt_screen; // the alternate screen was entered
     bool degraded;   // no terminal to talk to, so this is a no-op session
+    bool want_mouse; // mouse reporting was asked for, whether or not it took
     re_input_t in;
     uint32_t saved_in; // console mode, Windows only
     uint32_t saved_out;
@@ -58,6 +59,15 @@ void re_term_finish(re_term_t *t);
 // Whether the terminal was asked for mouse reporting and the request was made. A
 // front end uses this to decide whether to say "click" or to leave it unsaid.
 bool re_term_has_mouse(const re_term_t *t);
+
+// Step out of the full screen and back to cooked input, so a line can be typed with
+// echo and with the terminal's own editing. This is what a prompt needs: a program that
+// asks a question while the cursor is hidden and echo is off is asking it badly.
+//
+// Pause and resume are a pair, and resume restores mouse reporting too, because the
+// pause is usually a question and the answer comes back into the same session.
+void re_term_pause(re_term_t *t);
+bool re_term_resume(re_term_t *t);
 
 #ifdef __cplusplus
 }

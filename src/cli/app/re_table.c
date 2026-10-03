@@ -12,7 +12,7 @@
 #include "cli/cmds/re_cmds.h"
 #include "cli/screen/re_gui.h"
 static const re_cmd_t kCommands[] = {
-    {"gui", "full screen view of the functions, in the terminal", "gui <file>", re_cmd_gui, true},
+    {"gui", "full screen view of the functions, in the terminal", "gui [file]", re_cmd_gui, false},
     {"info", "format, architecture, hashes and layout summary", "info <file>", re_cmd_info, true},
     {"triage", "one call ingest view: layout, imports, devices, risk, capabilities",
      "triage <file>", re_cmd_triage, true},

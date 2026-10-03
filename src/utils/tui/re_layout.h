@@ -60,12 +60,25 @@ typedef struct {
     // the split. 0 asks for the minimum, which is the honest answer on a narrow
     // terminal rather than a pane one column wide.
     uint16_t left_w;
+
+    // The first screen, before there is a file. When welcome is set the body is one
+    // framed box carrying the message and a single button, and the split, the list and
+    // the code pane are all left out rather than drawn empty. An empty pane reads as a
+    // file with nothing in it, which is a different and wrong claim.
+    const char *welcome;
+    const char *button;
+
+    // Which control the button is, so a caller can tell a click on it from a click
+    // anywhere else. Set by re_layout_compose, because the id is handed out in drawing
+    // order and only the composer knows what order it drew in.
+    uint8_t button_zone;
 } re_layout_t;
 
-// Draw the arrangement onto a screen. Clips to the screen, refuses rather than
-// truncates when the screen is too short to hold it, and returns how many rows the
-// body ended up with so a caller that scrolls can tell whether anything was cut.
-uint16_t re_layout_compose(re_screen_t *s, const re_layout_t *L);
+// Draw the arrangement onto a screen. L is not const because the composer fills in
+// button_zone, and only it knows the id: zones are handed out in drawing order. Clips to the
+// screen, refuses rather than truncates when the screen is too short to hold it, and returns how
+// many rows the body ended up with so a caller that scrolls can tell whether anything was cut.
+uint16_t re_layout_compose(re_screen_t *s, re_layout_t *L);
 #ifdef __cplusplus
 }
 #endif

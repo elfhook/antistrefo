@@ -258,9 +258,15 @@ void re_screen_dump(const re_screen_t *s, re_strbuf_t *dst) {
                 last = (uint16_t)(x + 1);
         for (uint16_t x = 0; x < last; x++) {
             const re_cell_t *c = &s->cell[(size_t)y * s->cols + x];
+            // A blank cell is a space, not a hole. Skipping it collapses every
+            // interior gap, which moves whatever follows leftwards in the dump while
+            // it stays where it is on screen, and a dump that misreports where
+            // anything is cannot be used to check position at all. Only the trailing
+            // run is dropped.
             if (c->cols == 0 || !c->g[0])
-                continue;
-            re_strbuf_puts(dst, c->g);
+                re_strbuf_putc(dst, ' ');
+            else
+                re_strbuf_puts(dst, c->g);
         }
         re_strbuf_putc(dst, '\n');
     }
