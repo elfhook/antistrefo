@@ -7,26 +7,6 @@
 #include "utils/tui/re_layout.h"
 #include "utils/tui/re_screen.h"
 
-// The band order, top to bottom. Written out once as constants rather than as a
-// chain of offsets, because the whole point of the arrangement is that it is
-// readable: a reader should be able to see the bands and their order in one screen
-// of source instead of reverse engineering a pile of arithmetic.
-#define BAND_TITLE 0u   // the subject, centred
-#define BAND_TOOLBAR 1u // the row of controls
-#define BAND_NAV 2u     // position, with a handle
-#define BAND_LEGEND 3u  // what the shapes in the body mean
-#define BAND_BODY 4u    // everything below the legend, to the status line
-#define BAND_STATUS 5u  // the caret, at the very bottom
-
-// Fixed heights. The title and legend are one row each because there is nothing to
-// gain from more and everything to lose: they are labels, and a label that wraps is
-// a label that has stopped being a label. The body takes the rest.
-#define H_TITLE 1u
-#define H_TOOLBAR 1u
-#define H_NAV 1u
-#define H_LEGEND 1u
-#define H_STATUS 1u
-
 // The split is a proportion rather than a column count, because a fixed left column
 // that is right on an 80 column terminal is most of the screen on a 200 column one,
 // and wrong in the other direction on a 60. A proportion of the available width is
@@ -47,47 +27,153 @@ static uint16_t left_width(uint16_t total, uint16_t want) {
     return want;
 }
 
-// The left pane: a framed list with a heading and one selected row. Its own function
-// because it is the only part of the body that depends on the split, and splitting
-// the two apart is what keeps the composition readable.
-static void draw_left(re_screen_t *s, const re_layout_t *L, uint16_t y, uint16_t h, uint16_t w) {
-    re_screen_box(s, y, 0, w, h, L->list_title, (uint8_t)RE_ST_NONE);
-    if (h > 2u)
-        re_screen_list(s, (uint16_t)(y + 1u), 1, (uint16_t)(w - 2u), (uint16_t)(h - 1u),
-                       L->list_head, L->rows, L->n_rows, L->sel_row);
+typedef struct {
+    const char *h;
+    const char *v;
+    const char *tl;
+    const char *tr;
+    const char *bl;
+    const char *br;
+} frame_t;
+
+static frame_t frame_of(const re_screen_t *s) {
+    frame_t f;
+    if (s->tui.unicode) {
+        f.h = "\xe2\x94\x80";
+        f.v = "\xe2\x94\x82";
+        f.tl = "\xe2\x94\x8c";
+        f.tr = "\xe2\x94\x90";
+        f.bl = "\xe2\x94\x94";
+        f.br = "\xe2\x94\x98";
+        return f;
+    }
+    f.h = "-";
+    f.v = "|";
+    f.tl = "+";
+    f.tr = "+";
+    f.bl = "+";
+    f.br = "+";
+    return f;
 }
 
-// The right pane: a tab strip over a numbered code view with a scrollbar. Returns
-// nothing because a pane that cannot fit is simply not drawn: there is no fallback
-// that is better than an empty pane, and pretending otherwise hides a real problem.
-static void draw_right(re_screen_t *s, const re_layout_t *L, uint16_t y, uint16_t h, uint16_t x,
-                       uint16_t w, uint16_t screen_w) {
-    re_screen_tabs(s, y, x, w, L->tabs, L->n_tabs, L->active_tab);
-    re_screen_hline(s, (uint16_t)(y + 1u), x, w, "\xe2\x94\x80", (uint8_t)RE_ST_NONE);
-    uint16_t code_y = (uint16_t)(y + 2u);
-    uint16_t code_h = (uint16_t)(h - 2u);
-    if (!code_h || w <= 10u)
-        return;
-    // The mark array is indexed against the code lines, so its count is the line
-    // count: one byte per line saying whether that line carries a mark.
-    re_screen_gutter(s, code_y, x, code_h, L->base_line, L->marks, L->n_code);
-    re_screen_code(s, code_y, (uint16_t)(x + 9u), (uint16_t)(w - 10u), code_h, L->code, L->n_code,
-                   L->base_line, L->marks);
-    re_screen_vscroll(s, code_y, (uint16_t)(screen_w - 1u), code_h, (uint16_t)L->scroll_pos,
-                      (uint16_t)L->scroll_total);
+static uint16_t dash_n(re_screen_t *s, uint16_t y, uint16_t x, uint16_t n, uint16_t limit,
+                       const char *h) {
+    for (uint16_t i = 0; i < n && x < limit; i++) {
+        re_screen_put(s, y, x, h, (uint8_t)RE_ST_NONE, RE_SCREEN_ZONE_NONE);
+        x++;
+    }
+    return x;
 }
-// A button: the label in brackets, with the padding drawn after the closing bracket so
-// the whole thing carries one zone. The brackets are drawn last and belong to the zone,
-// which is what makes a click on one a click on the button rather than on the space
-// beside it.
-static void draw_button(re_screen_t *s, uint16_t y, uint16_t x, const char *label, uint8_t style,
-                        uint8_t zone) {
-    re_screen_put(s, y, x, "[", style, zone);
-    re_screen_put_run(s, y, (uint16_t)(x + 1u), (uint16_t)(x + 1u + RE_TUI_MIN_WIDTH), label, style,
-                      zone);
-    size_t n = re_tui_cols(label);
-    re_screen_put(s, y, (uint16_t)(x + 1u + n), "]", style, zone);
-    re_screen_fill(s, y, (uint16_t)(x + 2u + n), 1, 1, " ", style, zone);
+
+static uint16_t bracket_item(re_screen_t *s, uint16_t y, uint16_t x, uint16_t limit,
+                             const char *label, uint8_t st, uint8_t zone) {
+    if (x >= limit)
+        return x;
+    re_screen_put(s, y, x, "<", st, zone);
+    x = re_screen_put_run(s, y, (uint16_t)(x + 1u), limit, label ? label : "", st, zone);
+    if (x < limit) {
+        re_screen_put(s, y, x, ">", st, zone);
+        x++;
+    }
+    return x;
+}
+
+// The menu row. Items are <Name>, the version sits at the right, and the file name
+// takes whatever gap is left between them.
+static void draw_menu(re_screen_t *s, re_layout_t *L, const frame_t *f) {
+    uint16_t last = (uint16_t)(s->cols - 1u);
+    size_t mw = (L->mark && *L->mark) ? re_tui_cols(L->mark) + 2u : 0u;
+    uint16_t mark_x = last;
+    if (mw && mw + 2u < last)
+        mark_x = (uint16_t)(last - 1u - mw);
+    re_screen_put(s, 0, 0, f->tl, (uint8_t)RE_ST_NONE, RE_SCREEN_ZONE_NONE);
+    uint16_t cx = 1;
+    uint8_t first = RE_SCREEN_ZONE_NONE;
+    for (size_t i = 0; i < L->n_toolbar && cx + 4u < mark_x; i++) {
+        const char *label = L->toolbar && L->toolbar[i] ? L->toolbar[i] : "";
+        size_t lc = re_tui_cols(label);
+        if (cx + 1u + lc + 2u >= mark_x)
+            break;
+        cx = dash_n(s, 0, cx, 1, mark_x, f->h);
+        uint8_t zone = re_screen_zone(s);
+        if (first == RE_SCREEN_ZONE_NONE)
+            first = zone;
+        cx = bracket_item(s, 0, cx, mark_x, label, (uint8_t)RE_ST_NONE, zone);
+    }
+    L->open_zone = first;
+    if (L->file && *L->file && cx + 2u < mark_x)
+        cx =
+            re_screen_put_run(s, 0, cx, mark_x, L->file, (uint8_t)RE_ST_LABEL, RE_SCREEN_ZONE_NONE);
+    cx = dash_n(s, 0, cx, (uint16_t)(mark_x > cx ? mark_x - cx : 0u), mark_x, f->h);
+    if (mw && mark_x < last)
+        cx = bracket_item(s, 0, mark_x, last, L->mark, (uint8_t)RE_ST_NONE, RE_SCREEN_ZONE_NONE);
+    cx = dash_n(s, 0, cx, (uint16_t)(last > cx ? last - cx : 0u), last, f->h);
+    re_screen_put(s, 0, last, f->tr, (uint8_t)RE_ST_NONE, RE_SCREEN_ZONE_NONE);
+}
+
+// The page row. The list title fills the left pane's edge, and the pages start at the
+// split so the bar under them lines up with the names.
+static void draw_pages(re_screen_t *s, re_layout_t *L, uint16_t split, const frame_t *f) {
+    uint16_t last = (uint16_t)(s->cols - 1u);
+    if (split >= last)
+        split = (uint16_t)(last / 2u);
+    re_screen_put(s, 1, 0, f->tl, (uint8_t)RE_ST_NONE, RE_SCREEN_ZONE_NONE);
+    uint16_t cx = dash_n(s, 1, 1, 3, split, f->h);
+    if (L->list_title && *L->list_title && cx + 2u < split)
+        cx = bracket_item(s, 1, cx, split, L->list_title, (uint8_t)RE_ST_NONE, RE_SCREEN_ZONE_NONE);
+    cx = dash_n(s, 1, cx, (uint16_t)(split > cx ? split - cx : 0u), split, f->h);
+    uint8_t first = RE_SCREEN_ZONE_NONE;
+    uint8_t drawn = 0;
+    for (size_t i = 0; i < L->n_tabs && cx + 4u < last; i++) {
+        const char *label = L->tabs && L->tabs[i] ? L->tabs[i] : "";
+        size_t lc = re_tui_cols(label);
+        uint16_t gap = (i == L->active_tab) ? 3u : 1u;
+        if ((size_t)cx + gap + lc + 2u >= last)
+            break;
+        cx = dash_n(s, 1, cx, gap, last, f->h);
+        uint8_t zone = re_screen_zone(s);
+        if (first == RE_SCREEN_ZONE_NONE)
+            first = zone;
+        uint8_t st = (i == L->active_tab) ? (uint8_t)RE_ST_ACCENT : (uint8_t)RE_ST_NONE;
+        cx = bracket_item(s, 1, cx, last, label, st, zone);
+        drawn++;
+    }
+    L->tab_zone = first;
+    L->tabs_drawn = drawn;
+    cx = dash_n(s, 1, cx, (uint16_t)(last > cx ? last - cx : 0u), last, f->h);
+    re_screen_put(s, 1, last, f->tr, (uint8_t)RE_ST_NONE, RE_SCREEN_ZONE_NONE);
+}
+
+static void draw_bottom(re_screen_t *s, const frame_t *f) {
+    uint16_t y = (uint16_t)(s->rows - 1u);
+    uint16_t last = (uint16_t)(s->cols - 1u);
+    re_screen_put(s, y, 0, f->bl, (uint8_t)RE_ST_NONE, RE_SCREEN_ZONE_NONE);
+    (void)dash_n(s, y, 1, (uint16_t)(last - 1u), last, f->h);
+    re_screen_put(s, y, last, f->br, (uint8_t)RE_ST_NONE, RE_SCREEN_ZONE_NONE);
+}
+
+static void draw_body(re_screen_t *s, re_layout_t *L, uint16_t split, const frame_t *f) {
+    uint16_t last = (uint16_t)(s->cols - 1u);
+    uint16_t y1 = (uint16_t)(s->rows - 1u);
+    for (uint16_t y = 2; y < y1; y++) {
+        uint16_t r = (uint16_t)(y - 2u);
+        re_screen_put(s, y, 0, f->v, (uint8_t)RE_ST_NONE, RE_SCREEN_ZONE_NONE);
+        re_screen_put(s, y, split, f->v, (uint8_t)RE_ST_NONE, RE_SCREEN_ZONE_NONE);
+        re_screen_put(s, y, last, f->v, (uint8_t)RE_ST_NONE, RE_SCREEN_ZONE_NONE);
+        if (L->rows && r < L->n_rows && split > 2u) {
+            uint8_t st = (r == L->sel_row) ? (uint8_t)RE_ST_ACCENT : (uint8_t)RE_ST_NONE;
+            uint8_t zone = re_screen_zone(s);
+            if (L->rows_drawn == 0)
+                L->row_zone = zone;
+            if (L->rows_drawn < 255)
+                L->rows_drawn++;
+            re_screen_fill(s, y, 1, (uint16_t)(split - 1u), 1, " ", st, zone);
+            re_screen_put_run(s, y, 2, split, L->rows[r] ? L->rows[r] : "", st, zone);
+        }
+        if (L->code && r < L->n_code && split + 2u < last)
+            re_screen_put_run(s, y, (uint16_t)(split + 2u), last, L->code[r] ? L->code[r] : "",
+                              (uint8_t)RE_ST_NONE, RE_SCREEN_ZONE_NONE);
+    }
 }
 
 // The body before a file is open: one framed box, the message, and the one control
@@ -107,16 +193,25 @@ static void centred(re_screen_t *s, uint16_t y, uint16_t width, const char *text
     re_screen_put_run(s, y, x, (uint16_t)(1u + width), text, style, zone);
 }
 
-static uint16_t draw_welcome(re_screen_t *s, re_layout_t *L, uint16_t y, uint16_t h, uint16_t w) {
-    if (h < 5u || w < 24u)
-        return 0;
-    re_screen_box(s, y, 0, w, h, "Get started", (uint8_t)RE_ST_NONE);
-    uint16_t inner_w = (uint16_t)(w - 2u);
-    centred(s, (uint16_t)(y + 2u), inner_w, L->welcome ? L->welcome : "", (uint8_t)RE_ST_NONE,
+static void draw_welcome(re_screen_t *s, re_layout_t *L, const frame_t *f) {
+    uint16_t last = (uint16_t)(s->cols - 1u);
+    uint16_t y1 = (uint16_t)(s->rows - 1u);
+    re_screen_put(s, 1, 0, f->tl, (uint8_t)RE_ST_NONE, RE_SCREEN_ZONE_NONE);
+    (void)dash_n(s, 1, 1, (uint16_t)(last - 1u), last, f->h);
+    re_screen_put(s, 1, last, f->tr, (uint8_t)RE_ST_NONE, RE_SCREEN_ZONE_NONE);
+    for (uint16_t y = 2; y < y1; y++) {
+        re_screen_put(s, y, 0, f->v, (uint8_t)RE_ST_NONE, RE_SCREEN_ZONE_NONE);
+        re_screen_put(s, y, last, f->v, (uint8_t)RE_ST_NONE, RE_SCREEN_ZONE_NONE);
+    }
+    uint16_t inner = (uint16_t)(y1 > 2u ? y1 - 2u : 0u);
+    uint16_t mid = (uint16_t)(2u + inner / 2u);
+    centred(s, (uint16_t)(mid > 2u ? mid - 2u : 2u), s->cols, "Get started", (uint8_t)RE_ST_NONE,
             RE_SCREEN_ZONE_NONE);
-
+    centred(s, mid, s->cols, L->welcome ? L->welcome : "", (uint8_t)RE_ST_NONE,
+            RE_SCREEN_ZONE_NONE);
+    if (mid + 2u >= y1)
+        return;
     const char *label = L->button ? L->button : "Load";
-    size_t bc = re_tui_cols(label) + 3u;
     char btn[32];
     size_t k = 0;
     btn[k++] = '[';
@@ -125,64 +220,37 @@ static uint16_t draw_welcome(re_screen_t *s, re_layout_t *L, uint16_t y, uint16_
     btn[k++] = ']';
     btn[k] = '\0';
     L->button_zone = re_screen_zone(s);
-    centred(s, (uint16_t)(y + 4u), inner_w, btn, (uint8_t)RE_ST_ACCENT, L->button_zone);
-    (void)bc;
-    return h;
+    centred(s, (uint16_t)(mid + 2u), s->cols, btn, (uint8_t)RE_ST_ACCENT, L->button_zone);
 }
 
 uint16_t re_layout_compose(re_screen_t *s, re_layout_t *L) {
     if (!s->cell || !L)
         return 0;
-    if (s->rows < BAND_BODY + 2u) {
-        // Too short for the arrangement to mean anything. One line of the subject is
-        // the most that can be said honestly, so that is what is drawn.
+    L->button_zone = RE_SCREEN_ZONE_NONE;
+    L->open_zone = RE_SCREEN_ZONE_NONE;
+    L->tab_zone = RE_SCREEN_ZONE_NONE;
+    L->tabs_drawn = 0;
+    L->row_zone = RE_SCREEN_ZONE_NONE;
+    L->rows_drawn = 0;
+    if (s->rows < 4u || s->cols < 16u) {
+        re_screen_clear(s);
         re_screen_put_run(s, 0, 0, s->cols, L->file ? L->file : "", (uint8_t)RE_ST_TITLE,
                           RE_SCREEN_ZONE_NONE);
         return 0;
     }
     re_screen_clear(s);
-
-    uint16_t w = s->cols;
-    uint16_t top = BAND_TITLE;
-    uint16_t body_y = (uint16_t)(BAND_BODY + 1u);
-
-    // Title, centred the way a window title is: the subject alone on its own row.
-    if (L->file && *L->file && w > 2) {
-        size_t fc = re_tui_cols(L->file);
-        uint16_t fx = fc + 1 < w ? (uint16_t)((w - fc) / 2u) : 1;
-        re_screen_put_run(s, top, fx, w, L->file, (uint8_t)RE_ST_TITLE, RE_SCREEN_ZONE_NONE);
-    }
-    re_screen_toolbar(s, (uint16_t)(top + H_TITLE), L->toolbar, L->n_toolbar);
-    re_screen_nav(s, (uint16_t)(top + H_TITLE + H_TOOLBAR), 1, (uint16_t)(w - 2), L->nav_pos,
-                  L->nav_total);
-    re_screen_legend(s, (uint16_t)(top + H_TITLE + H_TOOLBAR + H_NAV), 1, (uint16_t)(w - 2),
-                     L->legend, L->n_legend);
-
-    uint16_t body_h = (uint16_t)(s->rows - body_y - H_STATUS);
-    if (!body_h)
-        return 0;
-
-    uint16_t left_w = left_width(w, L->left_w);
+    frame_t f = frame_of(s);
+    draw_menu(s, L, &f);
     if (L->welcome) {
-        // No file yet: one box, and none of the panes. The button's zone is recorded so
-        // a click on it can be told from a click anywhere else.
-        L->button_zone = RE_SCREEN_ZONE_NONE;
-        draw_welcome(s, L, body_y, body_h, w);
-        re_screen_status(s, (uint16_t)(s->rows - H_STATUS), 0, w, L->status, L->caret);
-        return body_h;
+        draw_welcome(s, L, &f);
+        draw_bottom(s, &f);
+        return (uint16_t)(s->rows - 2u);
     }
-    if (left_w + 2u >= w)
-        left_w = (uint16_t)((w > 4u) ? w / 3u : 0u);
-    draw_left(s, L, body_y, body_h, left_w);
-
-    // The gap between the panes carries the splitter. It is drawn as one column of
-    // dots rather than a frame, so it reads as something that can be dragged rather
-    // than as content.
-    uint16_t gap_x = left_w;
-    re_screen_vline(s, body_y, gap_x, body_h, "\xe2\x94\x86", (uint8_t)RE_ST_NONE);
-    draw_right(s, L, body_y, body_h, (uint16_t)(gap_x + 1u), (uint16_t)(w - gap_x - 1u), w);
-
-    uint16_t st_y = (uint16_t)(s->rows - H_STATUS);
-    re_screen_status(s, st_y, 0, w, L->status, L->caret);
-    return body_h;
+    uint16_t split = left_width(s->cols, L->left_w);
+    if (split + 8u >= s->cols)
+        split = (uint16_t)(s->cols / 3u);
+    draw_pages(s, L, split, &f);
+    draw_body(s, L, split, &f);
+    draw_bottom(s, &f);
+    return (uint16_t)(s->rows - 3u);
 }

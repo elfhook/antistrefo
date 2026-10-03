@@ -23,7 +23,12 @@ typedef struct {
     re_input_t in;
     uint32_t saved_in; // console mode, Windows only
     uint32_t saved_out;
+    uint32_t mouse_down; // buttons held, so a move is not reported as another press
+    uint16_t cell_row;   // last reported mouse cell, so a move inside it is dropped
+    uint16_t cell_col;
+    bool have_cell;
     bool have_saved;
+    bool have_out; // output mode was changed and must be put back
 } re_term_t;
 
 // Enter raw mode, the alternate screen, and optionally mouse reporting. Returns false
@@ -68,6 +73,11 @@ bool re_term_has_mouse(const re_term_t *t);
 // pause is usually a question and the answer comes back into the same session.
 void re_term_pause(re_term_t *t);
 bool re_term_resume(re_term_t *t);
+
+// The system open-file dialog. False on cancel, on a path that does not fit, and
+// where the platform has no dialog. The caller stays on the current screen: this
+// does not read a typed path.
+bool re_term_pick_file(char *out, size_t cap);
 
 #ifdef __cplusplus
 }

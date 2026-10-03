@@ -98,6 +98,9 @@ src/cli/app/main.cpp
     src/cli/screen/re_gui.c
     src/mcp/re_mcp.cpp)
 target_link_libraries(antistrefo PRIVATE re_core re_flags)
+if(WIN32)
+    target_link_libraries(antistrefo PRIVATE comdlg32)
+endif()
 if(MSVC)
     set_property(TARGET antistrefo PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     target_compile_definitions(antistrefo PRIVATE _CRT_SECURE_NO_WARNINGS)

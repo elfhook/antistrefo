@@ -300,6 +300,16 @@ bool re_input_next(re_input_t *in, re_ev_t *out) {
     }
 }
 
+bool re_input_is_click(const re_ev_t *ev) {
+    if (!ev || ev->kind != RE_EV_MOUSE || !ev->press)
+        return false;
+    // Bit 5 is a move and bit 6 is the wheel. Both set press in the report, and
+    // treating either as a click would load a file when the reader scrolled.
+    if ((ev->button & 96u) != 0)
+        return false;
+    return (ev->button & 3u) == RE_MOUSE_LEFT;
+}
+
 const char *re_input_key_name(uint32_t key) {
     switch (key) {
         case RE_KEY_UP:

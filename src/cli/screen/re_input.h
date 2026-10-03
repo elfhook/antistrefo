@@ -88,6 +88,10 @@ void re_input_feed(re_input_t *in, const uint8_t *p, size_t n);
 // exactly where it was.
 bool re_input_next(re_input_t *in, re_ev_t *out);
 
+// A primary-button press. Motion and the wheel share the button byte in the SGR
+// report, and neither of them activates a control.
+bool re_input_is_click(const re_ev_t *ev);
+
 // A name for a key, for a status bar. "Up" rather than 0x110000, because a status bar
 // is read by a person. Unknown keys come back as "?" rather than as a number.
 const char *re_input_key_name(uint32_t key);

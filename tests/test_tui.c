@@ -1,6 +1,6 @@
 // test_tui.c - the layout math of the framed report, checked without a terminal.
 // Module: test (C11).
-// Owns: checks on column counting, clipping, box geometry and panel composition.
+// Owns: column counts, clipping, boxes, panels, and zone hover and click.
 // Depends: re_core through re_tui.h. Every case here is one where a wrong answer
 // looks plausible on screen, so the numbers are pinned rather than eyeballed.
 #include "re_test.h"
@@ -13,7 +13,9 @@
 
 #include "utils/mem/re_arena.h"
 #include "utils/text/re_strbuf.h"
+#include "utils/tui/re_screen.h"
 #include "utils/tui/re_tui.h"
+#include "utils/tui/re_ui.h"
 
 // This suite is its own binary, so it owns its counters.
 int re_test_count = 0;
@@ -342,6 +344,75 @@ static void test_fits_widths(re_arena_t *a) {
     }
 }
 
+typedef struct {
+    int clicks;
+    int entered;
+    int left;
+} probe_t;
+
+static void ui_click(void *user) {
+    ((probe_t *)user)->clicks++;
+}
+
+static void ui_hover(void *user, bool over) {
+    probe_t *p = user;
+    if (over)
+        p->entered++;
+    else
+        p->left++;
+}
+
+// Hover fires on enter and leave, and a click is a press and a release on the same
+// zone. The release is checked after a clear, because the view rebinds between the
+// two events and a clear that forgot the press would make every button dead.
+static void test_hover_and_click(re_arena_t *a) {
+    re_strbuf_t out;
+    re_strbuf_init(&out, a);
+    re_screen_t s;
+    probe_t p;
+    re_ui_t u;
+    memset(&p, 0, sizeof(p));
+    RE_CHECK(re_screen_init(&s, a, &out, 2, 4));
+    re_screen_clear(&s);
+    re_screen_fill(&s, 0, 0, 2, 1, "A", (uint8_t)RE_ST_NONE, 1);
+    re_screen_fill(&s, 0, 2, 2, 1, "B", (uint8_t)RE_ST_NONE, 2);
+
+    re_ui_init(&u);
+    RE_CHECK(!re_ui_bind(&u, RE_SCREEN_ZONE_NONE, ui_click, ui_hover, &p));
+    RE_CHECK(re_ui_bind(&u, 1, ui_click, ui_hover, &p));
+    re_ui_pointer(&u, &s, 0, 0, RE_UI_MOVE);
+    RE_CHECK_EQ_U(p.entered, 1);
+    RE_CHECK_EQ_U(u.hot, 1);
+    re_ui_pointer(&u, &s, 0, 1, RE_UI_MOVE);
+    RE_CHECK_EQ_U(p.entered, 1);
+
+    re_ui_pointer(&u, &s, 0, 2, RE_UI_MOVE);
+    RE_CHECK_EQ_U(p.left, 1);
+    RE_CHECK_EQ_U(p.entered, 1);
+    RE_CHECK_EQ_U(u.hot, 2);
+    re_ui_mark(&u, &s, (uint8_t)RE_ST_HOVER, (uint8_t)RE_ST_PRESS);
+    RE_CHECK_EQ_U(s.cell[2].style, (unsigned)RE_ST_HOVER);
+    RE_CHECK_EQ_U(s.cell[0].style, (unsigned)RE_ST_NONE);
+
+    RE_CHECK(re_ui_bind(&u, 2, ui_click, ui_hover, &p));
+    re_ui_pointer(&u, &s, 0, 2, RE_UI_DOWN);
+    re_ui_mark(&u, &s, (uint8_t)RE_ST_HOVER, (uint8_t)RE_ST_PRESS);
+    RE_CHECK_EQ_U(s.cell[2].style, (unsigned)RE_ST_PRESS);
+    re_ui_clear(&u);
+    RE_CHECK_EQ_U(u.hot, 2);
+    RE_CHECK(re_ui_bind(&u, 2, ui_click, ui_hover, &p));
+    re_ui_pointer(&u, &s, 0, 2, RE_UI_UP);
+    RE_CHECK_EQ_U(p.clicks, 1);
+
+    re_ui_pointer(&u, &s, 0, 2, RE_UI_DOWN);
+    re_ui_pointer(&u, &s, 0, 0, RE_UI_UP);
+    RE_CHECK_EQ_U(p.clicks, 1);
+    RE_CHECK(re_ui_click(&u, 2));
+    RE_CHECK_EQ_U(p.clicks, 2);
+    re_ui_clear(&u);
+    RE_CHECK(!re_ui_click(&u, 2));
+}
+
 int main(void) {
     re_arena_t a;
     re_arena_init(&a, 0);
@@ -355,6 +426,7 @@ int main(void) {
     test_width();
     test_fits_widths(&a);
     test_header(&a);
+    test_hover_and_click(&a);
     re_arena_free(&a);
     return re_test_report("tui");
 }

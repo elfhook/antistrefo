@@ -35,6 +35,7 @@ extern "C" {
 #include "utils/tui/re_layout.h"
 #include "utils/tui/re_screen.h"
 #include "utils/tui/re_tui.h"
+#include "utils/tui/re_ui.h"
 #ifdef __cplusplus
 }
 #endif

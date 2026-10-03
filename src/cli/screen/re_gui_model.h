@@ -13,6 +13,7 @@ extern "C" {
 #include <stdint.h>
 
 #include "features/analysis/re_analyze.h"
+#include "features/data/re_vtable.h"
 #include "utils/mem/re_arena.h"
 
 // A pane's worth, not a promise about the file: a function can be longer than any pane
@@ -26,6 +27,7 @@ typedef struct {
     const char *text[RE_GUI_CODE_MAX];
     uint8_t mark[RE_GUI_CODE_MAX];
     size_t n;
+    size_t total;
     uint32_t base;
     size_t vis;
 } re_gui_listing_t;
@@ -46,9 +48,40 @@ void re_gui_funcs_fill(re_gui_funcs_t *l, re_arena_t *a, const re_analysis_t *an
 // moved to.
 void re_gui_funcs_window(size_t sel, const re_gui_funcs_t *l, const char **rows, size_t cap);
 
+// Which function a visible row is. The window stays centred on sel, and a click has
+// to name the function in that row rather than the row number itself.
+size_t re_gui_funcs_index(size_t sel, const re_gui_funcs_t *l, size_t row);
+
+// The visible row that shows sel, so the accent and a click land on the same function.
+size_t re_gui_funcs_row(size_t sel, const re_gui_funcs_t *l);
+
 // The disassembly of one function, decoded and rendered through the shared backend, so
 // the listing and a report cannot disagree about an address.
 void re_gui_listing_fill(re_gui_listing_t *ls, re_arena_t *a, const re_analysis_t *an, size_t sel);
+
+// One row is sixteen bytes: the address, the hex, then the ASCII. row0 is the first
+// row kept, so the wheel can move the pane a row at a time.
+void re_gui_hex_fill(re_gui_listing_t *ls, re_arena_t *a, const re_pe_t *pe, uint32_t rva,
+                     uint32_t size, size_t row0, size_t rows);
+
+// One line per imported symbol, "dll!name", in file order. None is "no imports".
+void re_gui_imports_fill(re_gui_listing_t *ls, re_arena_t *a, const re_pe_t *pe, size_t row0,
+                         size_t rows);
+
+// One line per export: rva, name, and code, data, or forwarder. The forwarder string
+// follows the word when the export is one.
+void re_gui_exports_fill(re_gui_listing_t *ls, re_arena_t *a, const re_pe_t *pe, size_t row0,
+                         size_t rows);
+
+// One line per class table from a scan already done, plus a line per base. None is
+// "no class tables". The scan itself stays with the caller, so it runs once.
+void re_gui_structs_fill(re_gui_listing_t *ls, re_arena_t *a, const re_vset_t *vs, size_t row0,
+                         size_t rows);
+
+// The right pane for one tab. Tab 0 leaves the listing empty. Tab 1 is not handled
+// here: that page is the decompiled body, which the caller already built.
+void re_gui_page_fill(re_gui_listing_t *ls, re_arena_t *a, const re_pe_t *pe, const re_vset_t *vs,
+                      size_t tab, uint32_t rva, uint32_t size, size_t row0, size_t rows);
 
 #ifdef __cplusplus
 }

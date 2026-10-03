@@ -113,6 +113,11 @@ void re_screen_clear(re_screen_t *s) {
         s->cell[i].style = (uint8_t)RE_ST_NONE;
         s->cell[i].zone = RE_SCREEN_ZONE_NONE;
     }
+    // A clear is a new frame. Zone ids are drawing order within that frame, so the
+    // counter has to start over with the cells. Left running, it walks up to the
+    // ceiling and then every control is drawn with no zone, which is a click that
+    // cannot land on anything.
+    s->zone_count = 0;
 }
 
 uint8_t re_screen_zone(re_screen_t *s) {

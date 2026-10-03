@@ -36,6 +36,8 @@ typedef enum {
     RE_ST_GOOD,   // a finding that is expected
     RE_ST_WARN,   // something worth a second look
     RE_ST_BAD,    // something wrong
+    RE_ST_HOVER,  // light blue background: the pointer is over a control
+    RE_ST_PRESS,  // dark blue background: the button is held down
 } re_style_t;
 
 typedef struct {
@@ -127,6 +129,10 @@ bool re_tui_fits_panels(const re_tui_t *t, size_t n, size_t min_w);
 // a primitive that hard codes the destination silently sends a panel's contents
 // straight to stdout. t is passed for the settings, not for the destination.
 void re_tui_styled(re_strbuf_t *dst, const re_tui_t *t, re_style_t style, const char *s);
+
+// The escape that turns a style on, or an empty string for none and for a style
+// this table does not know. A painter emits a reset first, then this.
+const char *re_tui_style_on(re_style_t style);
 void re_tui_fill(re_strbuf_t *dst, const re_tui_t *t, size_t n, const char *with);
 
 // Write s clipped to a column budget, with a one character ellipsis when it does not

@@ -143,6 +143,29 @@ static void test_mouse_coordinates_are_zero_based(void) {
     RE_CHECK_EQ_U(ev.kind, RE_EV_MOUSE);
 }
 
+// A click is a left press. The wheel and a drag set the same press bit, and treating
+// either as a click is how scrolling opens the load prompt.
+static void test_click_is_left_press(void) {
+    re_ev_t ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.kind = RE_EV_MOUSE;
+    ev.press = true;
+    ev.button = (uint8_t)RE_MOUSE_LEFT;
+    RE_CHECK(re_input_is_click(&ev));
+    ev.button = 4; // shift held; the low bits are still the left button
+    RE_CHECK(re_input_is_click(&ev));
+    ev.press = false;
+    RE_CHECK(!re_input_is_click(&ev));
+    ev.press = true;
+    ev.button = (uint8_t)RE_MOUSE_WHEEL_UP;
+    RE_CHECK(!re_input_is_click(&ev));
+    ev.button = (uint8_t)(RE_MOUSE_LEFT + 32u);
+    RE_CHECK(!re_input_is_click(&ev));
+    ev.button = (uint8_t)RE_MOUSE_RIGHT;
+    RE_CHECK(!re_input_is_click(&ev));
+    RE_CHECK(!re_input_is_click(NULL));
+}
+
 // A character split across two reads is one key. A terminal that flushes mid character
 // is normal, not a fault.
 static void test_utf8_split_across_feeds(void) {
@@ -268,12 +291,58 @@ static void test_diff_writes_nothing_when_unchanged(re_arena_t *a) {
     re_draw_frame(&d, &cur);
     RE_CHECK_EQ_U(d.cells, 0);
     RE_CHECK_EQ_U(d.out.len, 0);
+    // Colour on, and still nothing. A reset emitted for an unchanged frame is a
+    // write, and a write on every idle tick is the flicker.
+    cur.tui.color = true;
+    re_draw_frame(&d, &cur);
+    RE_CHECK_EQ_U(d.cells, 0);
+    RE_CHECK_EQ_U(d.out.len, 0);
 
     // One changed cell costs one cell, not a repaint.
     re_screen_put_run(&cur, 2, 3, 20, "X", RE_ST_NONE, RE_SCREEN_ZONE_NONE);
     re_draw_frame(&d, &cur);
     RE_CHECK_EQ_U(d.cells, 1);
     RE_CHECK(d.out.len > 0);
+}
+
+// Hover is light blue and a held button is dark blue. The numbers are the RGB the
+// painter emits, so a formula that only recolours the foreground fails this.
+static void test_button_styles_are_blue(re_arena_t *a) {
+    re_strbuf_t out;
+    re_strbuf_init(&out, a);
+    re_draw_t d;
+    RE_CHECK(re_draw_init(&d, a, 2, 8));
+    re_screen_t cur;
+    RE_CHECK(re_screen_init(&cur, a, &out, 2, 8));
+    re_screen_clear(&cur);
+    cur.tui.color = true;
+    re_screen_put_run(&cur, 0, 0, 8, "Load", (uint8_t)RE_ST_HOVER, 1);
+    re_draw_full(&d, &cur);
+    RE_CHECK(strstr(d.out.p, "48;2;186;220;255") != NULL);
+    RE_CHECK(strstr(d.out.p, "38;2;12;36;64") != NULL);
+    re_screen_put_run(&cur, 0, 0, 8, "Load", (uint8_t)RE_ST_PRESS, 1);
+    re_draw_frame(&d, &cur);
+    RE_CHECK(strstr(d.out.p, "48;2;15;55;130") != NULL);
+    RE_CHECK(strstr(d.out.p, "38;2;232;242;255") != NULL);
+}
+
+// A full repaint rewrites cells that did not change. A page switch uses this, because
+// a diff would leave the previous page standing in every cell the new page skips.
+static void test_full_repaint_rewrites_unchanged_cells(re_arena_t *a) {
+    re_strbuf_t out;
+    re_strbuf_init(&out, a);
+    re_draw_t d;
+    RE_CHECK(re_draw_init(&d, a, 2, 8));
+    re_screen_t cur;
+    RE_CHECK(re_screen_init(&cur, a, &out, 2, 8));
+    re_screen_clear(&cur);
+    re_screen_put_run(&cur, 0, 0, 8, "Load", (uint8_t)RE_ST_NONE, 1);
+    re_draw_frame(&d, &cur);
+    re_draw_full(&d, &cur);
+    RE_CHECK(strstr(d.out.p, "\x1b[2J") != NULL);
+    RE_CHECK(strstr(d.out.p, "L") != NULL);
+    RE_CHECK(strstr(d.out.p, "d") != NULL);
+    RE_CHECK_EQ_U(d.cells, 4);
 }
 
 // A resize cannot be diffed against, so it becomes a full repaint rather than a patch
@@ -370,12 +439,15 @@ int main(void) {
     test_partial_sequence_is_not_an_event();
     test_unknown_sequence_is_dropped();
     test_mouse_coordinates_are_zero_based();
+    test_click_is_left_press();
     test_utf8_split_across_feeds();
     test_key_names();
     test_focus_order_and_wrap(&a);
     test_click_resolves_through_the_grid(&a);
     test_focus_survives_rebuild(&a);
     test_diff_writes_nothing_when_unchanged(&a);
+    test_button_styles_are_blue(&a);
+    test_full_repaint_rewrites_unchanged_cells(&a);
     test_resize_forces_full_repaint(&a);
     test_pseudo_marks_control_flow();
     test_pseudo_split_bounds();

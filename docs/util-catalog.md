@@ -54,6 +54,7 @@ and the helper will be needed twice or loops over bytes, add it here first.
 | `re_tui_*` | the framed report: header, rules, panels, boxes, styles, clipping | `re_tui.h` |
 | `re_screen_*` | a cell grid and its widgets: tabs, legend, gutter, scrollbars, status, draw | `re_screen.h` |
 | `re_layout_*` | the reference screen arrangement, expressed as a struct and composed | `re_layout.h` |
+| `re_ui_*` | hover and click bindings over screen zones | `re_ui.h` |
 
 ## Aggregator
 

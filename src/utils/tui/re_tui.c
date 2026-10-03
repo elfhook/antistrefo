@@ -38,7 +38,7 @@ typedef struct {
     const char *off;
 } style_t;
 
-static const style_t kStyles[RE_ST_BAD + 1] = {
+static const style_t kStyles[RE_ST_PRESS + 1] = {
     {"", ""},                  // none
     {"\x1b[1;7m", "\x1b[0m"},  // title, inverted
     {"\x1b[1m", "\x1b[0m"},    // head, bold
@@ -47,6 +47,9 @@ static const style_t kStyles[RE_ST_BAD + 1] = {
     {"\x1b[32m", "\x1b[0m"},   // good, green
     {"\x1b[33m", "\x1b[0m"},   // warn, yellow
     {"\x1b[1;31m", "\x1b[0m"}, // bad, bold red
+    // hover: dark text on light blue. press: light text on dark blue.
+    {"\x1b[38;2;12;36;64;48;2;186;220;255m", "\x1b[0m"},
+    {"\x1b[38;2;232;242;255;48;2;15;55;130m", "\x1b[0m"},
 };
 
 bool re_tui_is_tty(void) {
@@ -190,8 +193,14 @@ void re_tui_init(re_tui_t *t, re_strbuf_t *out, re_strbuf_t *scratch, bool color
     t->unicode = unicode;
 }
 
+const char *re_tui_style_on(re_style_t style) {
+    if ((unsigned)style > (unsigned)RE_ST_PRESS)
+        return "";
+    return kStyles[style].on;
+}
+
 void re_tui_styled(re_strbuf_t *dst, const re_tui_t *t, re_style_t style, const char *s) {
-    if (!t->color || style == RE_ST_NONE) {
+    if (!t->color || style == RE_ST_NONE || (unsigned)style > (unsigned)RE_ST_PRESS) {
         re_strbuf_puts(dst, s ? s : "");
         return;
     }

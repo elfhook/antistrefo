@@ -83,7 +83,7 @@ static uint32_t paint_row(re_draw_t *d, const re_screen_t *cur, uint16_t row, ui
             // screen changes at once.
             re_strbuf_puts(&d->out, ESC "0m");
             if (c->style != RE_ST_NONE)
-                re_strbuf_appendf(&d->out, ESC "1;%um", 30u + (unsigned)(c->style % 8u));
+                re_strbuf_puts(&d->out, re_tui_style_on((re_style_t)c->style));
             *last_style = c->style;
         }
         if (c->g[0])
@@ -132,7 +132,9 @@ void re_draw_frame(re_draw_t *d, const re_screen_t *cur) {
     uint8_t last_style = 0xff;
     for (uint16_t row = 0; row < cur->rows; row++)
         d->cells += paint_row(d, cur, row, &last_style, styled);
-    if (styled)
+    // An idle frame that still emits a reset touches the terminal for nothing, and
+    // that touch is the flicker. The reset belongs to a frame that painted.
+    if (styled && d->cells)
         re_strbuf_puts(&d->out, ESC "0m");
     absorb(d, cur);
 }

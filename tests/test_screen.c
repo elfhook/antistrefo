@@ -205,6 +205,7 @@ static void arr_build(re_arena_t *a, arr_t *f) {
     re_strbuf_init(&f->out, a);
     re_strbuf_init(&f->dump, a);
     f->L.file = "lo_world.i64";
+    f->L.mark = "antistrefo 0.1.0";
     f->L.toolbar = tabs;
     f->L.n_toolbar = 3;
     f->L.nav_pos = 40;
@@ -240,13 +241,16 @@ static void test_layout_bands(re_arena_t *a) {
 
     const char *d = f.dump.p;
     RE_CHECK(strstr(d, "lo_world.i64") != NULL);
-    RE_CHECK(strstr(d, "Functions") != NULL);
-    RE_CHECK(strstr(d, "Pseudocode-A") != NULL);
-    RE_CHECK(strstr(d, "Function name") != NULL);
+    RE_CHECK(strstr(d, "<Functions>") != NULL);
+    RE_CHECK(strstr(d, "<Pseudocode-A>") != NULL);
+    RE_CHECK(strstr(d, "<antistrefo 0.1.0>") != NULL);
     RE_CHECK(strstr(d, "_printf") != NULL);
     RE_CHECK(strstr(d, "return 0;") != NULL);
-    RE_CHECK(strstr(d, "000003E9C _main:1") != NULL);
-    RE_CHECK(strstr(d, "1:8") != NULL);
+    bool accent = false;
+    for (uint16_t i = 0; i < (uint16_t)(s.rows * s.cols); i++)
+        if (s.cell[i].g[0] == 'P' && s.cell[i].style == (uint8_t)RE_ST_ACCENT)
+            accent = true;
+    RE_CHECK(accent);
 
     size_t nl = 0;
     for (const char *p = d; *p; p++)
@@ -330,25 +334,81 @@ static void test_welcome_centred(re_arena_t *a) {
 
     uint16_t quarter = (uint16_t)(s.cols / 4u);
     uint16_t first_x = 0;
-    for (uint16_t x = 0; x < s.cols; x++) {
-        if (s.cell[(size_t)9 * s.cols + x].zone == f.L.button_zone) {
-            first_x = x;
-            break;
-        }
-    }
+    for (uint16_t y = 0; y < s.rows && !first_x; y++)
+        for (uint16_t x = 0; x < s.cols; x++)
+            if (s.cell[(size_t)y * s.cols + x].zone == f.L.button_zone) {
+                first_x = x;
+                break;
+            }
     RE_CHECK(first_x > quarter);
     RE_CHECK(first_x < (uint16_t)(s.cols - quarter - 6u));
 
     uint16_t msg_x = 0;
-    for (uint16_t x = 0; x < s.cols; x++) {
-        const re_cell_t *c = &s.cell[(size_t)7 * s.cols + x];
-        if (c->g[0] && c->g[0] != '|') {
-            msg_x = x;
-            break;
+    for (uint16_t y = 0; y < s.rows && !msg_x; y++)
+        for (uint16_t x = 1; x + 3u < s.cols; x++) {
+            const re_cell_t *c = &s.cell[(size_t)y * s.cols + x];
+            const re_cell_t *o = &s.cell[(size_t)y * s.cols + x + 1u];
+            if (c->g[0] == 'l' && o->g[0] == 'o') {
+                msg_x = x;
+                break;
+            }
         }
-    }
     RE_CHECK(msg_x > quarter);
     RE_CHECK(msg_x < (uint16_t)(s.cols - quarter - 16u));
+}
+
+// Zone ids are per frame. A counter that keeps climbing gives Load a new id on every
+// redraw, and once it passes the ceiling the button is drawn with no zone, so a click
+// on it cannot land. The second compose has to report the same ids as the first.
+static void test_function_rows_are_controls(re_arena_t *a) {
+    arr_t f;
+    re_screen_t s;
+    arr_build(a, &f);
+    RE_CHECK(re_screen_init(&s, a, &f.out, 24, 100));
+    RE_CHECK(re_layout_compose(&s, &f.L) > 10);
+    RE_CHECK(f.L.row_zone != RE_SCREEN_ZONE_NONE);
+    RE_CHECK_EQ_U(f.L.rows_drawn, 3);
+    RE_CHECK(f.L.row_zone != f.L.tab_zone);
+    RE_CHECK(f.L.row_zone != f.L.open_zone);
+    bool named = false;
+    bool accent = false;
+    uint8_t picked = (uint8_t)(f.L.row_zone + 2u);
+    for (size_t i = 0; i < (size_t)s.rows * s.cols; i++) {
+        if (s.cell[i].zone == f.L.row_zone && s.cell[i].g[0] == '_')
+            named = true;
+        if (s.cell[i].zone == picked && s.cell[i].g[0] == '_' &&
+            s.cell[i].style == (uint8_t)RE_ST_ACCENT)
+            accent = true;
+    }
+    RE_CHECK(named);
+    RE_CHECK(accent);
+}
+
+static void test_load_zones_stable(re_arena_t *a) {
+    arr_t f;
+    re_screen_t s;
+    welcome_build(a, &f);
+    RE_CHECK(re_screen_init(&s, a, &f.out, 20, 70));
+    RE_CHECK(re_layout_compose(&s, &f.L) > 8);
+    uint8_t button = f.L.button_zone;
+    uint8_t open = f.L.open_zone;
+    RE_CHECK(button != RE_SCREEN_ZONE_NONE);
+    RE_CHECK(open != RE_SCREEN_ZONE_NONE);
+    RE_CHECK(open != button);
+
+    RE_CHECK(re_layout_compose(&s, &f.L) > 8);
+    RE_CHECK_EQ_U(f.L.button_zone, button);
+    RE_CHECK_EQ_U(f.L.open_zone, open);
+
+    char spelled[16] = {0};
+    size_t w = 0;
+    for (uint16_t x = 0; x < s.cols && w + 1 < sizeof(spelled); x++) {
+        const re_cell_t *c = &s.cell[x];
+        if (c->zone != open || !c->g[0] || c->g[0] == ' ')
+            continue;
+        spelled[w++] = c->g[0];
+    }
+    RE_CHECK(strcmp(spelled, "<Disasm-A>") == 0);
 }
 
 // A screen too short for the arrangement says the subject and stops, rather than
@@ -419,6 +479,8 @@ int main(int argc, char **argv) {
     test_layout_refuses_tiny_screen(&a);
     test_welcome(&a);
     test_welcome_centred(&a);
+    test_function_rows_are_controls(&a);
+    test_load_zones_stable(&a);
     test_draw_matches_dump(&a);
     re_arena_free(&a);
     return re_test_report("screen");

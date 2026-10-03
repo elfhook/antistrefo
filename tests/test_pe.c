@@ -16,6 +16,7 @@
 #include "features/meta/re_disasm.h"
 #include "features/pe/re_pe.h"
 #include "utils/mem/re_arena.h"
+#include "cli/screen/re_gui_model.h"
 
 #include "re_pe_fixture.h"
 
@@ -183,6 +184,41 @@ static void check_slack_matching(re_code_t *code) {
 // is only believed when its pSelf field repeats its own address, which is the one
 // thing in a data section that cannot happen by accident, so a run of coincidental
 // code pointers cannot turn into a class.
+static bool line_has(const re_gui_listing_t *ls, const char *needle) {
+    for (size_t i = 0; i < ls->n; i++) {
+        if (ls->text[i] && strstr(ls->text[i], needle))
+            return true;
+    }
+    return false;
+}
+
+// The right-hand pages, pinned on the text a reader would see. Counts are not enough:
+// a row of the right length with the wrong bytes, or an export line that names the
+// wrong function, would pass a length check and still be the wrong page.
+static void check_view_pages(const re_pe_t *pe, re_code_t *code, re_arena_t *a) {
+    re_gui_listing_t ls;
+    re_vset_t empty;
+    re_vset_t vs;
+    memset(&ls, 0, sizeof(ls));
+    memset(&empty, 0, sizeof(empty));
+    re_gui_hex_fill(&ls, a, pe, TEXT_RVA, 20u, 0, 8);
+    RE_CHECK(ls.n >= 1);
+    RE_CHECK(ls.text[0] && strstr(ls.text[0], "48 83 f8 01"));
+    re_gui_exports_fill(&ls, a, pe, 0, 8);
+    RE_CHECK(ls.n >= 1);
+    RE_CHECK(ls.text[0] && strstr(ls.text[0], "AlphaFunc"));
+    RE_CHECK(line_has(&ls, "KERNEL32.Sleep"));
+    re_gui_imports_fill(&ls, a, pe, 0, 8);
+    RE_CHECK(ls.n == 1);
+    RE_CHECK(ls.text[0] && strcmp(ls.text[0], "no imports") == 0);
+    re_gui_structs_fill(&ls, a, &empty, 0, 8);
+    RE_CHECK(ls.n == 1);
+    RE_CHECK(ls.text[0] && strcmp(ls.text[0], "no class tables") == 0);
+    re_vtable_scan(pe, code, a, &vs);
+    re_gui_structs_fill(&ls, a, &vs, 0, 8);
+    RE_CHECK(line_has(&ls, "Probe"));
+}
+
 static void check_vtables(const re_pe_t *pe, re_code_t *code, re_arena_t *a) {
     re_vset_t vs;
     re_vtable_scan(pe, code, a, &vs);
@@ -220,6 +256,19 @@ static void check_vtables(const re_pe_t *pe, re_code_t *code, re_arena_t *a) {
     RE_CHECK(!re_vtable_col_at(pe, 0xFFFFFFF0u, &td, &bcd));
 }
 
+static void check_func_pick(void) {
+    re_gui_funcs_t l;
+    memset(&l, 0, sizeof(l));
+    l.n = 10;
+    l.vis = 5;
+    RE_CHECK_EQ_U(re_gui_funcs_index(0, &l, 0), 0);
+    RE_CHECK_EQ_U(re_gui_funcs_index(0, &l, 2), 2);
+    RE_CHECK_EQ_U(re_gui_funcs_row(0, &l), 0);
+    RE_CHECK_EQ_U(re_gui_funcs_index(7, &l, 2), 7);
+    RE_CHECK_EQ_U(re_gui_funcs_row(7, &l), 2);
+    RE_CHECK_EQ_U(re_gui_funcs_index(9, &l, 4), 9);
+}
+
 int main(void) {
     uint8_t img[IMG_BYTES];
     re_arena_t a;
@@ -229,6 +278,7 @@ int main(void) {
     re_pe_parse(re_span(img, sizeof(img)), &a, &pe);
     RE_CHECK(pe.valid);
     RE_CHECK_EQ_U(pe.n_sec_field, 2);
+    check_func_pick();
     check_exports(&pe);
     check_export_kinds(&pe);
     check_one_flag_is_enough();
@@ -245,6 +295,7 @@ int main(void) {
             check_no_split_inside_unwind(&code, &scan);
             check_slack_matching(&code);
             check_vtables(&pe, &code, &a2);
+            check_view_pages(&pe, &code, &a2);
         }
         re_arena_free(&a2);
     }

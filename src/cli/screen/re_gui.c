@@ -9,10 +9,12 @@
 #include "features/analysis/re_analyze.h"
 #include "features/code/re_code.h"
 #include "features/code/re_stack.h"
+#include "features/data/re_vtable.h"
 #include "features/dec/re_decompile.h"
 #include "utils/mem/re_buf.h"
 #include "utils/tui/re_layout.h"
 #include "utils/tui/re_screen.h"
+#include "utils/tui/re_ui.h"
 #include "cli/screen/re_draw.h"
 #include "cli/screen/re_focus.h"
 #include "cli/screen/re_gui_model.h"
@@ -27,43 +29,57 @@
 // pane has a fixed number of rows and a function can be longer than any of them.
 #define LIST_ROWS RE_GUI_LIST_ROWS
 
-// The panes that exist. Two, not five: a tab that opens onto "not in this build" is a
-// promise the tool does not keep, so the strip grows when the panes do.
-#define RE_TAB_COUNT 2u
+// The pages on the body's top edge. The list of functions stays on the left for all
+// of them; the right pane is what changes.
+#define RE_PAGE_COUNT 6u
+
+typedef struct gui gui_t;
 
 typedef struct {
+    gui_t *g;
+    size_t index;
+} page_arg_t;
+
+typedef struct gui {
     re_analysis_t an;
     re_term_t term;
     re_draw_t draw;
     re_focus_t focus;
     size_t sel; // the selected function
-    size_t tab; // 0 disassembly, 1 pseudocode
-    bool mouse; // mouse reporting is on, so the status may say "click"
+    size_t tab; // which page the right pane shows
     bool quit;
     bool want_load;  // the load control was activated
     bool loaded;     // a file is open, so the body is the file view
     bool fana_ready; // the analysis arena holds a mapping
     uint8_t button_zone;
-    // The analysis gets its own arena, freed and remade on every load, because a mapped
-    // binary is arena memory and a session that opened twenty of them would run out.
-    // The path is copied rather than borrowed for the same reason: the analysis arena
-    // goes away on a reload, and the title still has to name what is loaded.
+    uint8_t open_zone; // File, on the menu row
+    uint8_t tab_zone;
+    uint8_t tabs_drawn;
+    uint8_t row_zone;
+    uint8_t rows_drawn;
+    page_arg_t row_arg[LIST_ROWS];
+    bool repaint; // the page changed, so the next frame is a full console clear
+    size_t page_off;
+    size_t page_rows;
+    size_t page_for;
+    size_t page_sel;
+    bool classes_ready;
+    re_vset_t classes;
+    page_arg_t page_arg[RE_PAGE_COUNT];
+    re_ui_t ui;
+    // Remade on every load. A mapped binary lives in it, and the path is copied so the
+    // title still names the file after that arena is freed.
     re_arena_t fana;
     char path[512];
-    // What the right pane shows, decided once per turn by the active tab and filled in
-    // by whichever pass produced it. Keeping it here rather than in compose is what
-    // lets the layout stay ignorant of where its text came from.
+    // The right pane's lines for this turn. Compose draws them and does not fill them.
     const char **body;
     const uint8_t *body_marks;
     size_t body_n;
     uint32_t body_base;
-    const char *body_note;
 } gui_t;
 
-// The decompiled body, kept across turns. Decompiling walks and lowers the whole
-// function, so doing it on every frame would be doing the same work sixty times a
-// second to produce the same text. It is built once per selected function and reused
-// until the selection moves.
+// Built once per selected function. Doing it every frame would lower the same body
+// again and again for the same text.
 typedef struct {
     re_strbuf_t buf;
     const char *line[RE_PSEUDO_MAX];
@@ -74,17 +90,11 @@ typedef struct {
     bool ok;
 } pseudo_t;
 
-// Split the emitted body into lines. The buffer is left intact apart from the line
-// endings, which become terminators, so the pointers are C strings and the grid never
-// sees a newline inside a cell.
 static void pseudo_split(pseudo_t *ps) {
     re_strbuf_putc(&ps->buf, 0);
     ps->n = re_pseudo_split(ps->buf.p, ps->line, ps->mark, RE_PSEUDO_MAX);
 }
 
-// The decompiled body for the selected function, built once and reused. Refusing to
-// decompile is the case worth being careful about: an empty pane reads as "this
-// function does nothing", which is a different and wrong claim.
 static void pseudo_fill(pseudo_t *ps, re_arena_t *a, re_analysis_t *an, size_t sel) {
     if (!ps->started) {
         re_strbuf_init(&ps->buf, a);
@@ -101,8 +111,6 @@ static void pseudo_fill(pseudo_t *ps, re_arena_t *a, re_analysis_t *an, size_t s
     const re_func_t *f = RE_VEC_PTR(&an->scan.funcs, re_func_t, sel);
     re_decomp_t d;
     d.code = &an->code;
-    // The xref set is what turns a call target into a name; without it every call
-    // prints as a bare address.
     d.xrefs = &an->xs;
     d.arena = a;
     re_stack_t st;
@@ -112,56 +120,78 @@ static void pseudo_fill(pseudo_t *ps, re_arena_t *a, re_analysis_t *an, size_t s
         re_decompile_func(&d, f, &st, &ps->buf);
     pseudo_split(ps);
     if (!ps->n) {
-        ps->line[0] = "// this body did not lower: no instruction was recovered from it";
+        // The two slashes are written as a slash and a hex byte. A "//" inside a
+        // string is eaten by the gate's comment stripper, and the function that
+        // follows is then measured as part of this one.
+        ps->line[0] = "/\x2f this body did not lower: no instruction was recovered from it";
         ps->mark[0] = 1;
         ps->n = 1;
     }
 }
 
-// The right pane's content for the active tab. The disassembly is rebuilt every turn
-// because it is cheap and should follow the selection exactly; the pseudocode is not,
-// which is why the two take different paths.
-static void body_for(gui_t *g, re_arena_t *a, re_gui_listing_t *ls, pseudo_t *ps, size_t sel) {
+static void show_lines(gui_t *g, const char **text, const uint8_t *marks, size_t n, size_t total) {
+    if (total && g->page_off >= total)
+        g->page_off = total - 1u;
+    g->page_rows = total;
+    g->body = text;
+    g->body_marks = marks;
+    g->body_n = n;
+    g->body_base = 0;
+}
+
+static void body_for(gui_t *g, re_arena_t *a, re_gui_listing_t *ls, pseudo_t *ps, size_t sel,
+                     uint16_t rows) {
+    const re_func_t *f = re_func_at(&g->an.scan, sel);
+    const re_pe_t *pe = g->an.has_pe ? &g->an.pe : NULL;
+    const re_vset_t *vs = NULL;
+    size_t pane = rows > 3u ? (size_t)rows - 3u : 1u;
+    if (g->page_for != g->tab || g->page_sel != sel) {
+        g->page_for = g->tab;
+        g->page_sel = sel;
+        g->page_off = 0;
+    }
     if (g->tab == 1) {
+        size_t off;
         pseudo_fill(ps, a, &g->an, sel);
-        g->body = ps->line;
-        g->body_marks = ps->mark;
-        g->body_n = ps->n;
-        g->body_base = 0;
+        off = g->page_off < ps->n ? g->page_off : (ps->n ? ps->n - 1u : 0u);
+        g->page_off = off;
+        show_lines(g, ps->n ? ps->line + off : NULL, ps->n ? ps->mark + off : NULL,
+                   ps->n > off ? ps->n - off : 0u, ps->n);
         return;
     }
-    re_gui_listing_fill(ls, a, &g->an, sel);
-    g->body = ls->text;
-    g->body_marks = ls->mark;
-    g->body_n = ls->n;
-    g->body_base = ls->base;
+    if (g->tab == 3 && !g->classes_ready && pe && g->an.has_code) {
+        re_vtable_scan(pe, &g->an.code, &g->fana, &g->classes);
+        g->classes_ready = true;
+    }
+    if (g->classes_ready)
+        vs = &g->classes;
+    re_gui_page_fill(ls, a, pe, vs, g->tab, f ? f->rva : 0, f ? f->size : 0, g->page_off, pane);
+    show_lines(g, g->tab ? ls->text : NULL, NULL, g->tab ? ls->n : 0u, ls->total);
 }
 
 static void compose(re_screen_t *s, gui_t *g, const re_gui_funcs_t *l) {
-    static const char *kTabs[RE_TAB_COUNT] = {"Disasm", "Pseudocode"};
-    static const char *kToolbar[] = {"Open", "Save", "Graph", "Strngs", "Xrefs", "Help"};
-    static const char *kLegend[] = {"code", "branch", "gap", "selected"};
+    static const char *kPages[RE_PAGE_COUNT] = {"graph View", "pseudo-code", "hex View",
+                                                "structures", "imports",     "exports"};
+    static const char *kMenu[] = {"File", "Edit", "Jump", "Search", "Options", "Help"};
 
     re_layout_t L = {0};
-    L.toolbar = kToolbar;
+    L.toolbar = kMenu;
     L.n_toolbar = 6;
-    L.legend = kLegend;
-    L.n_legend = 4;
-    L.left_w = 30;
+    L.mark = "antistrefo 0.1.0";
+    L.left_w = 28;
     g->button_zone = RE_SCREEN_ZONE_NONE;
 
     if (!g->loaded) {
-        // The first screen. No list, no panes, no empty function table: a pane drawn
-        // with nothing in it reads as a file that has no functions, which is a
-        // different and wrong claim.
         L.file = "antistrefo";
         L.welcome = "load a file here";
         L.button = "Load";
-        L.status = "no file";
-        L.caret =
-            g->mouse ? "click Load, or drop a file on this window" : "press Enter to load a file";
         re_layout_compose(s, &L);
         g->button_zone = L.button_zone;
+        g->open_zone = L.open_zone;
+        g->tab_zone = RE_SCREEN_ZONE_NONE;
+        g->tabs_drawn = 0;
+        g->row_zone = RE_SCREEN_ZONE_NONE;
+        g->rows_drawn = 0;
         re_focus_build(&g->focus, s);
         return;
     }
@@ -169,47 +199,43 @@ static void compose(re_screen_t *s, gui_t *g, const re_gui_funcs_t *l) {
     const char *lrows[LIST_ROWS];
     re_gui_funcs_window(g->sel, l, lrows, LIST_ROWS);
 
-    char status[80];
-    snprintf(status, sizeof(status), "%u functions", (unsigned)l->n);
-
     L.file = g->path;
-    L.nav_pos = g->sel;
-    L.nav_total = l->n;
     L.list_title = "Functions";
-    L.list_head = "Name";
     L.rows = lrows;
     L.n_rows = l->vis ? l->vis : 1u;
-    L.sel_row = l->vis > 1u ? l->vis / 2u : 0u;
-    L.tabs = kTabs;
-    L.n_tabs = RE_TAB_COUNT;
+    L.sel_row = re_gui_funcs_row(g->sel, l);
+    L.tabs = kPages;
+    L.n_tabs = RE_PAGE_COUNT;
     L.active_tab = g->tab;
     L.code = g->body;
     L.n_code = g->body_n;
     L.base_line = g->body_base;
     L.marks = g->body_marks;
-    L.scroll_pos = 0;
-    L.scroll_total = g->body_n ? g->body_n : 1u;
-    L.status = status;
-    L.caret = g->mouse ? "click or Tab; Enter opens; q quits" : "arrows move; q quits";
     re_layout_compose(s, &L);
+    g->button_zone = L.button_zone;
+    g->open_zone = L.open_zone;
+    g->tab_zone = L.tab_zone;
+    g->tabs_drawn = L.tabs_drawn;
+    g->row_zone = L.row_zone;
+    g->rows_drawn = L.rows_drawn;
+    for (size_t i = 0; i < g->rows_drawn && i < LIST_ROWS; i++) {
+        g->row_arg[i].g = g;
+        g->row_arg[i].index = re_gui_funcs_index(g->sel, l, i);
+    }
     re_focus_build(&g->focus, s);
 }
-// Open a file into the session, replacing whatever was there. The analysis arena is
-// remade rather than grown into: a mapped binary is arena memory, and a session that
-// loaded twenty of them would exhaust one arena instead of saying so.
 static bool load_file(gui_t *g, re_arena_t *a, re_gui_funcs_t *list, pseudo_t *ps,
                       const char *path) {
+    g->classes_ready = false;
+    g->page_off = 0;
     if (g->fana_ready) {
         re_analysis_close(&g->an);
         g->fana_ready = false;
     }
     re_arena_free(&g->fana);
     re_arena_init(&g->fana, 1u << 23);
-    if (!re_analysis_open(&g->an, &g->fana, path)) {
-        // Keep whatever was open. Failing a load must not cost the reader the file they
-        // were already reading, which is the one thing they cannot get back.
+    if (!re_analysis_open(&g->an, &g->fana, path))
         return false;
-    }
     g->fana_ready = true;
     size_t n = 0;
     while (path[n] && n + 1u < sizeof(g->path)) {
@@ -220,47 +246,10 @@ static bool load_file(gui_t *g, re_arena_t *a, re_gui_funcs_t *list, pseudo_t *p
     g->loaded = true;
     g->sel = 0;
     g->tab = 0;
-    // The caches are keyed on the function index, and the function list is a different
-    // list now, so both have to be told the old answers no longer apply.
     ps->built_for = (size_t)-1;
     list->n = 0;
     re_gui_funcs_fill(list, a, &g->an);
     return true;
-}
-
-// The prompt. It steps out of the full screen and back to cooked input, because a
-// question asked with the cursor hidden and echo off is a question asked badly. This
-// is the same affordance the shell's "open" gives, deliberately: one way to name a file
-// in this tool, not two that drift apart.
-static bool prompt_path(gui_t *g, char *out, size_t cap) {
-    static const char kAsk[] = "\n  load a file (empty to go back): ";
-    static const char kDone[] = "\n";
-    re_term_pause(&g->term);
-    // Written through the terminal layer rather than to stdout directly, so the one
-    // path bytes take to a terminal is the one the rest of the front end uses.
-    re_term_write(&g->term, kAsk, sizeof(kAsk) - 1u);
-    char line[512];
-    bool got = fgets(line, (int)cap, stdin) != NULL;
-    re_term_write(&g->term, kDone, sizeof(kDone) - 1u);
-    re_term_resume(&g->term);
-    if (!got)
-        return false;
-    size_t n = 0;
-    while (line[n] && line[n] != '\n' && line[n] != '\r')
-        n++;
-    line[n] = '\0';
-    // Trim the surrounding spaces a pasted path usually carries. A path that legitimately
-    // ends in one is not a thing anybody means to type.
-    while (n && (line[0] == ' ')) {
-        for (size_t i = 0; i + 1 < n; i++)
-            line[i] = line[i + 1];
-        n--;
-        line[n] = '\0';
-    }
-    for (size_t i = 0; i < n; i++)
-        out[i] = line[i];
-    out[n] = '\0';
-    return n > 0;
 }
 
 static void apply(gui_t *g, const re_ev_t *ev) {
@@ -269,11 +258,14 @@ static void apply(gui_t *g, const re_ev_t *ev) {
             case 'q':
             case 'Q':
             case RE_KEY_ESCAPE:
-                // Before a file is open, leaving is still what Escape should do. The
-                // button is reached with Enter and Tab, so nothing is lost.
                 g->quit = true;
                 return;
             case RE_KEY_ENTER:
+                if (re_ui_click(&g->ui, g->focus.zone))
+                    return;
+                if (!g->loaded)
+                    g->want_load = true;
+                return;
             case 'l':
             case 'L':
                 if (!g->loaded)
@@ -302,22 +294,87 @@ static void apply(gui_t *g, const re_ev_t *ev) {
                 re_focus_prev(&g->focus);
                 return;
             case RE_KEY_LEFT:
-                if (g->tab)
+                if (g->tab) {
                     g->tab--;
+                    g->repaint = true;
+                }
                 return;
             case RE_KEY_RIGHT:
-                g->tab++;
+                if (g->tab + 1u < RE_PAGE_COUNT) {
+                    g->tab++;
+                    g->repaint = true;
+                }
                 return;
             default:
                 return;
         }
     }
-    if (ev->kind == RE_EV_MOUSE && ev->press) {
-        // The click is already resolved against the grid by the caller, so all that is
-        // left here is to let the wheel move. A click that hit a control has moved the
-        // focus and nothing else; what it activates is a later decision.
+}
+
+static void on_load(void *user) {
+    ((gui_t *)user)->want_load = true;
+}
+
+static void on_page(void *user) {
+    page_arg_t *a = user;
+    if (!a || !a->g || a->index == a->g->tab)
+        return;
+    a->g->tab = a->index;
+    a->g->repaint = true;
+}
+
+static void on_menu(void *user) {
+    (void)user;
+}
+
+static void on_row(void *user) {
+    page_arg_t *a = user;
+    if (!a || !a->g)
+        return;
+    a->g->sel = a->index;
+}
+
+static void bind_actions(gui_t *g) {
+    re_ui_clear(&g->ui);
+    re_ui_bind(&g->ui, g->button_zone, on_load, NULL, g);
+    re_ui_bind(&g->ui, g->open_zone, on_load, NULL, g);
+    if (g->open_zone != RE_SCREEN_ZONE_NONE)
+        for (size_t i = 1; i < 6u; i++)
+            re_ui_bind(&g->ui, (uint8_t)(g->open_zone + i), on_menu, NULL, g);
+    for (size_t i = 0; i < g->tabs_drawn && i < RE_PAGE_COUNT; i++) {
+        g->page_arg[i].g = g;
+        g->page_arg[i].index = i;
+        re_ui_bind(&g->ui, (uint8_t)(g->tab_zone + i), on_page, NULL, &g->page_arg[i]);
+    }
+    if (g->row_zone != RE_SCREEN_ZONE_NONE)
+        for (size_t i = 0; i < g->rows_drawn && i < LIST_ROWS; i++)
+            re_ui_bind(&g->ui, (uint8_t)(g->row_zone + i), on_row, NULL, &g->row_arg[i]);
+}
+
+static void feed_pointer(gui_t *g, re_screen_t *frame, const re_ev_t *ev) {
+    if (ev->button == RE_MOUSE_WHEEL_UP || ev->button == RE_MOUSE_WHEEL_DOWN) {
+        if (ev->button == RE_MOUSE_WHEEL_DOWN) {
+            if (g->page_rows && g->page_off + 1u < g->page_rows)
+                g->page_off++;
+        } else if (g->page_off) {
+            g->page_off--;
+        }
         return;
     }
+    if ((ev->button & 64u) != 0)
+        return;
+    if ((ev->button & 32u) != 0) {
+        re_ui_pointer(&g->ui, frame, ev->row, ev->col, RE_UI_MOVE);
+        return;
+    }
+    if (!ev->press) {
+        re_ui_pointer(&g->ui, frame, ev->row, ev->col, RE_UI_UP);
+        return;
+    }
+    if (!re_input_is_click(ev))
+        return;
+    (void)re_focus_click(&g->focus, frame, ev->row, ev->col);
+    re_ui_pointer(&g->ui, frame, ev->row, ev->col, RE_UI_DOWN);
 }
 
 // One turn of the loop: compose, paint, wait. Returns false to leave.
@@ -325,11 +382,23 @@ static bool turn(gui_t *g, re_arena_t *a, re_screen_t *frame, re_gui_funcs_t *li
                  re_gui_listing_t *ls, pseudo_t *ps) {
     if (list->n && g->sel >= list->n)
         g->sel = list->n - 1u;
-    body_for(g, a, ls, ps, g->sel);
+    body_for(g, a, ls, ps, g->sel, frame->rows);
     compose(frame, g, list);
-    re_draw_full(&g->draw, frame);
-    re_draw_home(&g->draw, 0, 0);
-    re_term_write(&g->term, g->draw.out.p, g->draw.out.len);
+    bind_actions(g);
+    // Color is off until a caller asks. The button backgrounds are the ask.
+    frame->tui.color = re_tui_want_color();
+    re_ui_mark(&g->ui, frame, (uint8_t)RE_ST_HOVER, (uint8_t)RE_ST_PRESS);
+    // A page change clears the console and writes every cell. A diff leaves the
+    // previous page in any cell the new page does not overwrite.
+    if (g->repaint || !g->draw.valid)
+        re_draw_full(&g->draw, frame);
+    else
+        re_draw_frame(&g->draw, frame);
+    g->repaint = false;
+    if (g->draw.out.len) {
+        re_draw_home(&g->draw, 0, 0);
+        re_term_write(&g->term, g->draw.out.p, g->draw.out.len);
+    }
 
     re_ev_t ev;
     if (!re_term_wait(&g->term, &ev, 250u)) {
@@ -348,10 +417,8 @@ static bool turn(gui_t *g, re_arena_t *a, re_screen_t *frame, re_gui_funcs_t *li
         return re_draw_resize(&g->draw, a, nr, nc) &&
                re_screen_init(frame, a, &g->draw.out, nr, nc);
     }
-    if (ev.kind == RE_EV_MOUSE && ev.press)
-        // A click that landed on a control moved the focus. One that did not is
-        // nothing, which is right for a stray click in the body.
-        (void)re_focus_click(&g->focus, frame, ev.row, ev.col);
+    if (ev.kind == RE_EV_MOUSE)
+        feed_pointer(g, frame, &ev);
     apply(g, &ev);
     return !g->quit;
 }
@@ -378,10 +445,9 @@ int re_cmd_gui(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     (void)argc;
     (void)argv;
     (void)ctx;
-    // No file is not an error. Opening the binary with nothing named is the case the
-    // welcome screen exists for, so the path is optional and its absence is the state.
     gui_t g;
     memset(&g, 0, sizeof(g));
+    re_ui_init(&g.ui);
     re_arena_t arena;
     re_arena_init(&arena, 1u << 23);
     re_gui_funcs_t list;
@@ -399,8 +465,6 @@ int re_cmd_gui(re_ctx_t *ctx, const char *path, int argc, char **argv) {
         re_arena_free(&arena);
         return 2;
     }
-    g.mouse = re_term_has_mouse(&g.term);
-
     // A named file is loaded now. Without one the first screen is the welcome, which is
     // what opening the binary by double clicking it should produce, so this is not a
     // different code path: it is the same one with nothing to load yet.
@@ -416,8 +480,11 @@ int re_cmd_gui(re_ctx_t *ctx, const char *path, int argc, char **argv) {
             if (g.want_load) {
                 char typed[512];
                 g.want_load = false;
-                if (prompt_path(&g, typed, sizeof(typed)))
+                if (re_term_pick_file(typed, sizeof(typed)))
                     load_file(&g, &arena, &list, &ps, typed);
+                // The dialog covers the console. The diff still believes the old frame
+                // is showing, so the next paint has to be a full one.
+                g.draw.valid = false;
             }
         }
     }

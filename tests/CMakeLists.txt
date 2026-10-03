@@ -104,7 +104,7 @@ add_test(NAME jr COMMAND re_test_jr)
 # The PE suite is separate because "is this address code or data" is the question a
 # wrong answer to makes every later pass quietly wrong, and the fixture it shares with
 # the cfg suite lives in a header so the two cannot disagree about the bytes.
-add_executable(re_test_pe test_pe.c)
+add_executable(re_test_pe test_pe.c ${CMAKE_SOURCE_DIR}/src/cli/screen/re_gui_model.c)
 target_link_libraries(re_test_pe PRIVATE re_core re_utils re_flags)
 if(MSVC)
     set_property(TARGET re_test_pe
