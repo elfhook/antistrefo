@@ -4,6 +4,9 @@
 // Depends: re_prep.h.
 #include "cli/cmds/re_prep.h"
 
+#include "features/analysis/re_analyze.h"
+#include "features/data/re_gopath.h"
+#include "features/lib/re_sigfile.h"
 #include "features/pe/re_format.h"
 #include "utils/text/re_hex.h"
 
@@ -39,6 +42,42 @@ void re_envelope(re_jw_t *w, const char *tool, re_span_t img, const re_pe_t *pe)
     re_jw_kcstr(w, "arch", arch);
     re_jw_ku64(w, "size", img.n);
     re_jw_ku64(w, "image_base", pe->image_base);
+}
+
+// The names the image states about itself, before any pattern is consulted. A Go binary
+// lists every function it contains and what each is called, which is evidence a signature
+// cannot produce, and the signature pass below leaves those functions alone. A file with
+// no such table costs one search and no names.
+static size_t name_from_image(re_ctx_t *ctx, re_code_t *code, re_fscan_t *scan) {
+    re_vec_t syms;
+    re_goinfo_t info;
+    uint64_t lo = 0;
+    uint64_t hi = 0;
+    re_vec_init(&syms, sizeof(re_gosym_t));
+    re_code_window(code, &lo, &hi);
+    if (!re_gopath_scan(code->img, lo, hi, code->base + code->pe->entry_rva, ctx->arena, &syms,
+                        &info))
+        return 0;
+    return re_symbols_apply(scan, &syms);
+}
+
+size_t re_prep_names(re_ctx_t *ctx, const char *sigfile, re_code_t *code, re_fscan_t *scan,
+                     re_flirt_load_stat_t *stat) {
+    re_vec_t sigs;
+    re_sigdb_t db;
+    size_t named = name_from_image(ctx, code, scan);
+    if (stat) {
+        stat->before = 0;
+        stat->loaded = 0;
+        stat->rejected = 0;
+        stat->skipped = 0;
+    }
+    re_vec_init(&sigs, sizeof(re_sig_t));
+    re_flirt_builtin(ctx->arena, &sigs);
+    if (sigfile)
+        re_sigfile_load(ctx->arena, sigfile, &sigs, stat);
+    re_sigdb_build(ctx->arena, &sigs, &db);
+    return named + re_flirt_name_all(&db, code, scan);
 }
 
 bool re_parse_addr(re_ctx_t *ctx, re_str_t s, const re_pe_t *pe, uint64_t *out) {

@@ -1,191 +1,23 @@
-// re_func.c - the recursive descent that turns decoded control flow into functions.
+// re_func.c - what a walk of the whole image consists of: seeds and passes.
 // Module: feature (C11).
-// Owns: seeding, the block walk, edge recording, and the stack frame size.
-// Depends: re_func.h and re_code. A function is reported only if it was walked.
+// Owns: the seeds, the unwind and sweep passes, naming, and the edge counts.
+// Depends: re_func_priv.h, which holds the walk itself and the state it shares
+//           with the seeds. A function is reported only if it was walked.
 #include "features/code/re_func.h"
 
 #include "features/pe/re_pe.h"
+
+// Declared here because the scan sorts its table and then applies the names the image
+// states; the body sits below the walk it serves, next to the sort it depends on.
+static void name_exports(const re_pe_t *pe, re_fscan_t *out);
 
 void re_fscan_init(re_fscan_t *s) {
     re_vec_init(&s->funcs, sizeof(re_func_t));
     re_vec_init(&s->edges, sizeof(re_edge_t));
 }
+#include "features/code/re_func_priv.h"
 
-typedef struct {
-    re_code_t *code;
-    re_arena_t *a;
-    re_vec_t *edges; // re_edge_t
-    re_vec_t *queue; // uint64_t, candidate function starts still to walk
-    re_vec_t *out;   // re_func_t
-} walk_t;
-
-static void push_u64(re_arena_t *a, re_vec_t *v, uint64_t x) {
-    RE_VEC_PUSH(v, a, x);
-}
-
-static void add_edge(re_arena_t *a, re_vec_t *v, uint64_t from, uint64_t to, uint8_t kind,
-                     bool has_to) {
-    re_edge_t e;
-    e.from = from;
-    e.to = to;
-    e.kind = kind;
-    e.has_to = has_to;
-    RE_VEC_PUSH(v, a, e);
-}
-
-// A cheap byte test for a function start, used only by the sweep that looks for
-// functions nothing points at. It never calls the decoder, because that sweep
-// probes every byte of the section and a decode per byte would be hopeless.
-static bool looks_like_start(const re_code_t *c, uint64_t va) {
-    re_span_t b;
-    const uint8_t *p;
-    if (!re_code_at(c, va, &b) || b.n < 4)
-        return false;
-    p = (const uint8_t *)b.p;
-    if (p[0] == 0xF3 && p[1] == 0x0F && p[2] == 0x1E && (p[3] == 0xFA || p[3] == 0xFB))
-        return true; // endbr64 or endbr32
-    if (p[0] == 0x55)
-        return true; // push rbp
-    if (p[0] == 0x48 && p[1] == 0x89 && p[2] == 0xE5)
-        return true; // mov rbp, rsp
-    if (p[0] == 0x48 && p[1] == 0x83 && p[2] == 0xEC)
-        return true; // sub rsp, imm8
-    if (p[0] == 0x48 && p[1] == 0x81 && p[2] == 0xEC)
-        return true; // sub rsp, imm32
-    return false;
-}
-
-// The stack a function reserves. Only a sub rsp inside the prologue window
-// counts, and the window is counted in instructions this function actually walked
-// rather than in bytes, so a frame size can never be read out of the next
-// function when this one is short.
-static bool sub_rsp(const re_insn_t *in, uint32_t *out) {
-    if (in->insn_id != 0x0081 && in->insn_id != 0x0083)
-        return false;
-    if (in->modrm != 0xEC)
-        return false;
-    if (in->imm <= 0 || in->imm >= 65536)
-        return false;
-    *out = (uint32_t)in->imm;
-    return true;
-}
-// A data reference is a RIP relative operand, or a wide immediate that looks like
-// an address in this image. Both are how code reaches strings, jump tables and
-// import addresses, and neither is a control flow edge, so they are recorded
-// separately or a caller asking "what does this function touch" sees nothing.
-static bool data_ref(const re_code_t *c, const re_insn_t *in) {
-    if (in->is_call || in->is_branch)
-        return false; // the operand is the transfer's own target, not a data use
-    if (in->has_mem)
-        return true;
-    if (in->opsize == 8 && in->imm > 0xFFFF && (uint64_t)in->imm >= c->base)
-        return true;
-    return false;
-}
-
-// One direct transfer, and what to do about it. The distinction that matters is
-// conditional against unconditional: a conditional branch target is another block
-// of this same function, while an unconditional jmp is a tail call into a
-// different function and its target must go to the function queue instead.
-// Treating the second as a block is how one function ends up reporting another
-// function's instructions as its own.
-//
-// A transfer through a RIP relative operand names its target too. That form is how
-// a driver calls a Windows API, through the import slot, and calling it indirect
-// would throw away the single most useful fact about the reference.
-static void take_edge(walk_t *w, re_vec_t *blocks, const re_insn_t *in, re_func_t *f) {
-    uint8_t kind = RE_EDGE_NONE;
-    uint64_t target = in->has_target ? in->target : (in->has_mem ? in->mem : 0);
-    bool have = in->has_target || in->has_mem;
-    if (data_ref(w->code, in))
-        add_edge(w->a, w->edges, in->addr, in->has_mem ? in->mem : (uint64_t)in->imm, RE_EDGE_DATA,
-                 true);
-    if (in->is_call)
-        kind = RE_EDGE_CALL;
-    else if (in->is_branch)
-        kind = in->is_conditional ? RE_EDGE_COND : RE_EDGE_JUMP;
-    if (kind == RE_EDGE_NONE)
-        return;
-    if (!have) {
-        // An unresolved transfer is still a fact about the function: a call
-        // through a register cannot be resolved, and an indirect jump is a
-        // dispatch. Both are recorded so the report can say so out loud.
-        add_edge(w->a, w->edges, in->addr, 0, kind, false);
-        if (in->is_call)
-            f->n_calls++;
-        else {
-            f->n_jumps++;
-            f->flags |= RE_FUNC_JTABLE;
-            if (!f->dispatch)
-                f->dispatch = in->addr;
-        }
-        return;
-    }
-    add_edge(w->a, w->edges, in->addr, target, kind, true);
-    if (in->is_call)
-        f->n_calls++;
-    else
-        f->n_jumps++;
-    if (!re_code_in_code(w->code, target)) {
-        // A call through an import slot lands in data, not code, and that is
-        // expected rather than a call that left the image.
-        if (!in->has_mem)
-            f->flags |= RE_FUNC_EXTERNAL;
-        return;
-    }
-    if (in->is_call || !in->is_conditional)
-        push_u64(w->a, w->queue, target);
-    else if (!re_code_covered(w->code, target, 1))
-        push_u64(w->a, blocks, target);
-}
-
-// Walk one function. Blocks are appended to a list and consumed with a cursor
-// rather than popped, because the vector has no remove and a cursor needs none.
-// Every instruction that can fall through queues the next address, which is what
-// turns this into a walk rather than a single decode.
-static void walk_func(walk_t *w, uint64_t start, re_func_t *f) {
-    re_vec_t blocks;
-    size_t cursor = 0;
-    uint64_t hi = start;
-    re_vec_init(&blocks, sizeof(uint64_t));
-    push_u64(w->a, &blocks, start);
-    f->va = start;
-    f->dispatch = 0;
-    f->rva = (uint32_t)(start - w->code->base);
-    f->n_insns = 0;
-    f->n_calls = 0;
-    f->n_jumps = 0;
-    f->flags = 0;
-    f->name = re_str("");
-    f->frame_size = 0;
-    while (cursor < RE_VEC_LEN(&blocks) && f->n_insns < RE_FUNC_MAX_INSNS) {
-        uint64_t va = *(const uint64_t *)RE_VEC_PTR(&blocks, uint64_t, cursor);
-        re_insn_t in;
-        uint32_t frame = 0;
-        cursor++;
-        if (!re_code_insn(w->code, va, &in))
-            continue;
-        if (re_code_covered(w->code, va, in.size))
-            continue;
-        re_code_mark(w->code, va, in.size);
-        f->n_insns++;
-        if (va + in.size > hi)
-            hi = va + in.size;
-        if (f->n_insns <= 12 && f->frame_size == 0 && sub_rsp(&in, &frame))
-            f->frame_size = frame;
-        if (in.is_return)
-            f->flags |= RE_FUNC_RET;
-        take_edge(w, &blocks, &in, f);
-        if (!in.is_return && !(in.is_branch && !in.is_conditional))
-            push_u64(w->a, &blocks, va + in.size);
-    }
-    f->size = (uint32_t)(hi - start);
-    // A body that is little more than a jump is a thunk: a jump through the
-    // import table, or a tail call the compiler left in place.
-    if (f->n_insns <= 2 && f->n_jumps >= 1)
-        f->flags |= RE_FUNC_THUNK;
-    re_vec_truncate(&blocks, 0);
-}
+#include "features/code/re_seeds.h"
 
 static int cmp_va(const void *a, const void *b, void *ctx) {
     const re_func_t *x = (const re_func_t *)a;
@@ -210,7 +42,7 @@ static void unwind_pass(walk_t *w) {
         if (!re_code_in_code(w->code, start) || re_code_covered(w->code, start, 1))
             continue;
         re_func_t f;
-        walk_func(w, start, &f);
+        re_walk_func(w, start, &f);
         if (f.n_insns == 0)
             continue;
         f.flags |= RE_FUNC_UNWIND;
@@ -242,9 +74,9 @@ static void sweep(walk_t *w) {
             if (re_pe_unwind_covering(w->code->pe, (uint32_t)(at - w->code->base), &u) &&
                 w->code->base + u.begin != at)
                 continue;
-            if (!looks_like_start(w->code, at))
+            if (!re_walk_looks_like_start(w->code, at))
                 continue;
-            walk_func(w, at, &f);
+            re_walk_func(w, at, &f);
             if (f.n_insns == 0)
                 continue;
             f.flags |= RE_FUNC_PROLOGUE;
@@ -273,7 +105,28 @@ static void adopt_unwind(const re_pe_t *pe, re_vec_t *funcs) {
 // How many transfers leave each function. One pass over the edges, with the owning
 // function found by binary search, because the caller needs this for every function
 // and asking the edge list per function made emitting a large file quadratic.
+// Two records that share bytes. The walk of an earlier function sometimes runs
+// past its real end into the next one, and then the next function's opening is
+// already claimed and every branch into it looks like a target in the middle of an
+// instruction. The later function is the one whose bytes were taken, so the flag
+// goes there; the sizes have already been reconciled against the unwind table by
+// this point, which is what makes the test exact rather than an inference.
+static void mark_record_overlaps(re_fscan_t *s) {
+    for (size_t i = 1; i < RE_VEC_LEN(&s->funcs); i++) {
+        const re_func_t *prev = RE_VEC_PTR(&s->funcs, re_func_t, i - 1);
+        re_func_t *f = RE_VEC_PTR(&s->funcs, re_func_t, i);
+        uint64_t end = prev->va + prev->size;
+        // A record with no size at all says nothing, so it is not an overlap.
+        if (prev->size > 0 && end > f->va)
+            f->flags |= RE_FUNC_OVERLAP;
+    }
+}
+
 static void count_edges(re_fscan_t *s) {
+    // Zeroed here as well, so the count is this pass's answer no matter what the
+    // record was created with. An increment over an unset field is not a count.
+    for (size_t i = 0; i < RE_VEC_LEN(&s->funcs); i++)
+        RE_VEC_PTR(&s->funcs, re_func_t, i)->out_edges = 0;
     for (size_t i = 0; i < RE_VEC_LEN(&s->edges); i++) {
         const re_edge_t *e = RE_VEC_PTR(&s->edges, re_edge_t, i);
         long f = re_func_index_of(s, e->from);
@@ -282,31 +135,64 @@ static void count_edges(re_fscan_t *s) {
     }
 }
 
+// Name the functions the image's own structures point at, without a transfer. An
+// export name and a name a structure states are not the same claim: an export entry
+// is a statement about an entry point, while a dispatch slot is a statement that the
+// compiler put this address in this field. So this runs after the exports and never
+// replaces a name that is already there, and a seed with no name - a bare code
+// pointer - has nothing to apply.
+static void name_seeds(const re_vec_t *seeds, re_fscan_t *out) {
+    for (size_t i = 0; i < RE_VEC_LEN(seeds); i++) {
+        const re_seed_t *s = RE_VEC_PTR(seeds, re_seed_t, i);
+        long idx;
+        re_func_t *f;
+        if (s->name.n == 0)
+            continue;
+        idx = re_func_index_of(out, s->va);
+        if (idx < 0)
+            continue;
+        f = RE_VEC_PTR(&out->funcs, re_func_t, (size_t)idx);
+        if (f->va != s->va || f->name.n != 0)
+            continue;
+        f->name = s->name;
+        f->module = s->module;
+    }
+}
+
 void re_func_scan(re_code_t *c, re_arena_t *a, re_fscan_t *out) {
     re_vec_t queue;
+    re_vec_t seeds;
+    re_vec_t irp;
     walk_t w;
     size_t cursor = 0;
     re_fscan_init(out);
     re_vec_init(&queue, sizeof(uint64_t));
+    re_vec_init(&seeds, sizeof(re_seed_t));
+    re_vec_init(&irp, sizeof(re_seed_t));
     w.code = c;
     w.a = a;
     w.edges = &out->edges;
     w.queue = &queue;
     w.out = &out->funcs;
     if (c->pe->entry_rva)
-        push_u64(a, &queue, c->base + c->pe->entry_rva);
+        re_walk_push(a, &queue, c->base + c->pe->entry_rva);
     for (size_t i = 0; i < RE_VEC_LEN(&c->pe->exports); i++) {
         const re_pe_exp_t *e = RE_VEC_PTR(&c->pe->exports, re_pe_exp_t, i);
         if (e->rva)
-            push_u64(a, &queue, c->base + e->rva);
+            re_walk_push(a, &queue, c->base + e->rva);
     }
+    // The starts nothing branches to, queued after the ones a reader would expect, so
+    // a seed that lands inside a function found the ordinary way is skipped as covered.
+    re_seed_collect(c->pe, c, a, &seeds);
+    for (size_t i = 0; i < RE_VEC_LEN(&seeds); i++)
+        re_walk_push(a, &queue, RE_VEC_AT(&seeds, re_seed_t, i).va);
     while (cursor < RE_VEC_LEN(&queue)) {
         uint64_t start = *(const uint64_t *)RE_VEC_PTR(&queue, uint64_t, cursor);
         re_func_t f;
         cursor++;
         if (!re_code_in_code(c, start) || re_code_covered(c, start, 1))
             continue;
-        walk_func(&w, start, &f);
+        re_walk_func(&w, start, &f);
         if (f.n_insns == 0)
             continue;
         if (c->pe->entry_rva && f.rva == c->pe->entry_rva)
@@ -317,7 +203,41 @@ void re_func_scan(re_code_t *c, re_arena_t *a, re_fscan_t *out) {
     sweep(&w);
     adopt_unwind(c->pe, &out->funcs);
     re_vec_sort(&out->funcs, cmp_va, NULL);
+    mark_record_overlaps(out);
+    name_exports(c->pe, out);
+    name_seeds(&seeds, out);
+    // The dispatch slots a driver fills in. This is asked for after the walk only
+    // because the names are applied to the functions the walk found: the scan itself
+    // is over the image's bytes, since a driver's entry point is usually a short stub
+    // and the table is filled in by the function it calls.
+    re_seed_irp(c->pe, c, a, &irp);
+    name_seeds(&irp, out);
     count_edges(out);
+    re_vec_truncate(&seeds, 0);
+    re_vec_truncate(&irp, 0);
+}
+
+// The image states its own export names, which makes them the strongest name a
+// function can have: everything else - a signature pattern, a recovered Go symbol
+// table, a reader's own note - is an inference. Applied after the sort so each export
+// is one binary search, and a function that exactly starts at the export takes the
+// name; a function merely containing that address is left alone, because an export
+// entry names an entry point.
+static void name_exports(const re_pe_t *pe, re_fscan_t *out) {
+    if (!pe)
+        return;
+    for (size_t i = 0; i < RE_VEC_LEN(&pe->exports); i++) {
+        const re_pe_exp_t *e = RE_VEC_PTR(&pe->exports, re_pe_exp_t, i);
+        long idx = re_func_index_of(out, pe->image_base + e->rva);
+        re_func_t *f;
+        if (idx < 0)
+            continue;
+        f = RE_VEC_PTR(&out->funcs, re_func_t, (size_t)idx);
+        if (f->va != pe->image_base + e->rva || e->name.n == 0)
+            continue;
+        f->name = e->name;
+        f->flags |= RE_FUNC_EXPORT;
+    }
 }
 
 const re_func_t *re_func_at(const re_fscan_t *s, size_t index) {

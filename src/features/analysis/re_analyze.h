@@ -18,12 +18,15 @@ extern "C" {
 #include "features/code/re_jtable.h"
 #include "features/code/re_stack.h"
 #include "features/code/re_xref.h"
+#include "features/data/re_gopath.h"
 #include "features/data/re_regions.h"
 #include "features/data/re_strings.h"
+#include "features/flow/re_names.h"
 #include "features/lib/re_flirt.h"
 #include "features/pe/re_pe.h"
 #include "utils/mem/re_arena.h"
 #include "utils/mem/re_vec.h"
+#include "re_score.h"
 
 // The passes, in the order they run. Order matters and is not arbitrary: functions
 // must exist before their edges can be indexed, and a cross reference needs a
@@ -32,12 +35,15 @@ extern "C" {
 typedef enum {
     RE_PASS_FORMAT = 0, // the PE itself: sections, directories, entropy
     RE_PASS_FUNCS,      // recursive descent from the entry point and exports
+    RE_PASS_SYMBOLS,    // the image's own function table, when it has one
     RE_PASS_XREFS,      // both directions of the reference graph
     RE_PASS_JTABLES,    // indirect branch dispatch
     RE_PASS_STRINGS,    // string and device extraction
     RE_PASS_REGIONS,    // code versus data, per window
     RE_PASS_STACK,      // argument registers and frame sizes, per function
     RE_PASS_FLIRT,      // byte pattern library identification
+    RE_PASS_NAMES,      // vtable slot naming, virtual call recovery, EH scopes
+    RE_PASS_SCORE,      // the quality scoreboard over everything the passes found
     RE_PASS_COUNT
 } re_pass_t;
 
@@ -77,8 +83,16 @@ typedef struct re_analysis_s {
     re_strings_t strs;
     re_vec_t jtables; // re_jtable_t
     re_vec_t regions; // re_region_t
-    re_vec_t sigs;    // re_sig_t
-    re_vec_t passes;  // re_pass_stat_t, one per pass, in run order
+    re_vec_t gosyms;  // re_gosym_t, what the Go function table named
+    re_goinfo_t go;   // the table's own shape, zeroed when there is none
+    size_t go_named;  // functions a Go symbol table named
+    re_vec_t sigs;    // re_sig_t, what the signature pass loaded
+    re_sigdb_t sigdb; // the same set, indexed by first byte
+    re_flirt_load_stat_t sigstat;
+    re_names_stat_t names; // what the naming pass recovered
+    re_score_t score;      // the scoreboard's six ratios and their composite
+    size_t named;          // functions a signature named
+    re_vec_t passes;       // re_pass_stat_t, one per pass, in run order
     bool has_pe;
     bool has_code;
     bool ok;
@@ -111,6 +125,15 @@ const char *re_analysis_skip_name(uint8_t skip);
 // records nobody asked for. The context is not const because the walk marks the code
 // map as it goes.
 bool re_analysis_stack_of(re_analysis_t *an, size_t index, re_stack_t *out);
+
+// Apply a table the image states about itself to a function table. A function takes a
+// name only when an entry starts at exactly its own address, so a table read with the
+// wrong origin names nothing rather than naming the wrong functions, and a function the
+// image already names keeps that name. Returns how many functions it named. This is a
+// function and not a step inside a pass because the command line names functions too, and
+// a report that names them differently from the analysis would be two answers to one
+// question.
+size_t re_symbols_apply(re_fscan_t *scan, const re_vec_t *syms);
 
 #ifdef __cplusplus
 }

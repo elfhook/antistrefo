@@ -21,10 +21,6 @@
 #include "utils/json/re_json.h"
 #include "utils/text/re_strbuf.h"
 
-#include "cli/cmds/re_cmds3.h"
-
-#include "cli/render/re_render.h"
-#include "cli/render/re_report.h"
 // The flags a function carries, as names rather than a bitmask, because a caller
 // reading this should not have to know which bit means prologue.
 static void emit_flags(re_jw_t *w, uint32_t flags) {
@@ -46,6 +42,8 @@ static void emit_flags(re_jw_t *w, uint32_t flags) {
         // inferred from bytes. Only the first two are facts about the binary; the
         // rest are what a pass concluded, and a report should not hide which.
         {RE_FUNC_UNWIND, "unwind"},
+        {RE_FUNC_JUNK, "junk"},
+        {RE_FUNC_TRUNC, "trunc"},
     };
     re_jw_key(w, "flags");
     re_jw_arr(w);
@@ -68,6 +66,18 @@ static void emit_func(re_ctx_t *ctx, re_code_t *code, re_jw_t *w, const re_func_
     re_jw_ku64(w, "calls", f->n_calls);
     re_jw_ku64(w, "jumps", f->n_jumps);
     re_jw_ku64(w, "out_edges", edges);
+    // Bytes inside the body that do not decode. Emitted only when there are some,
+    // because a zero here means nothing was skipped and a reader should be able to
+    // tell that from a field that was never computed.
+    if (f->junk)
+        re_jw_ku64(w, "junk", f->junk);
+    // Transfers whose destination could not be resolved: a call through a register
+    // and a jump through a table both land here, and a reader counting calls needs
+    // to know how many were left open rather than silently missing them.
+    if (f->open_edges)
+        re_jw_ku64(w, "open_edges", f->open_edges);
+    if (f->flags & RE_FUNC_TRUNC)
+        re_jw_kbool(w, "truncated", true);
     if (f->dispatch)
         re_jw_khex(w, "dispatch", f->dispatch, 16);
     re_stack_analyze(code, f, ctx->arena, &st);
@@ -88,6 +98,10 @@ static void emit_func(re_ctx_t *ctx, re_code_t *code, re_jw_t *w, const re_func_
         re_jw_kbool(w, "tail_call", true);
     if (f->name.n)
         re_jw_kstr(w, "name", f->name);
+    // The library a signature named, when one did. A name on its own says what the
+    // function is called; the module says which evidence produced that name.
+    if (f->module.n)
+        re_jw_kstr(w, "module", f->module);
     if (xs) {
         re_vec_t strs;
         re_vec_init(&strs, sizeof(uint32_t));
@@ -106,33 +120,31 @@ int re_cmd_funcs(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     re_code_t code;
     re_fscan_t scan;
     re_xrefset_t xs;
-    (void)argc;
-    (void)argv;
     if (!re_prepare(ctx, path, &f, &pe, &code))
         return re_err_exit_code(ctx->err->code);
     re_func_scan(&code, ctx->arena, &scan);
     re_xref_build(&code, &scan, &pe, ctx->arena, &xs);
-    re_vec_t sigs;
-    re_vec_init(&sigs, sizeof(re_sig_t));
-    re_flirt_builtin(ctx->arena, &sigs);
     const char *sigfile = re_cmd_positional(argc, argv, 1);
-    if (sigfile)
-        re_flirt_load(ctx->arena, sigfile, &sigs);
+    re_flirt_load_stat_t stat;
+    size_t named = re_prep_names(ctx, sigfile, &code, &scan, &stat);
     re_jw_t w;
     re_jw_init(&w, ctx->arena);
     re_envelope(&w, "funcs", f.whole, &pe);
-    re_jw_ku64(&w, "signatures", RE_VEC_LEN(&sigs));
+    re_jw_ku64(&w, "named", named);
+    re_jw_ku64(&w, "signatures", stat.before + stat.loaded);
+    if (sigfile) {
+        re_jw_kstr(&w, "signature_file", re_str(sigfile));
+        re_jw_ku64(&w, "signatures_loaded", stat.loaded);
+        if (stat.rejected)
+            re_jw_ku64(&w, "signatures_rejected", stat.rejected);
+    }
     re_jw_key(&w, "functions");
     re_jw_arr(&w);
     size_t shown = 0;
     size_t total = RE_VEC_LEN(&scan.funcs);
     for (size_t i = ctx->offset; i < total && shown < ctx->limit; i++, shown++) {
-        re_func_t fn = *re_func_at(&scan, i);
-        re_str_t nm = re_str("");
-        re_str_t mod = re_str("");
-        if (re_flirt_name(&code, &fn, &sigs, &nm, &mod))
-            fn.name = nm;
-        emit_func(ctx, &code, &w, &fn, re_func_edge_count(&scan, &fn), &xs);
+        const re_func_t *fn = re_func_at(&scan, i);
+        emit_func(ctx, &code, &w, fn, re_func_edge_count(&scan, fn), &xs);
     }
     re_jw_arr_end(&w);
     re_jw_ku64(&w, "total", total);

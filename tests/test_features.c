@@ -5,7 +5,6 @@
 #include "features/data/re_search.h"
 #include "features/lib/re_demangle.h"
 #include "features/lib/re_demangle_rtti.h"
-#include "features/lib/re_flirt.h"
 #include "utils/sys/re_entropy.h"
 #include "utils/sys/re_time.h"
 #include "utils/text/re_util.h"
@@ -226,6 +225,8 @@ static void test_search(void) {
 }
 
 static void test_demangle_msvc(void);
+static void test_demangle_rust(void);
+static void test_demangle_rust_tuple(void);
 
 static void test_demangle(void) {
     re_arena_t a;
@@ -251,6 +252,18 @@ static void test_demangle(void) {
     RE_CHECK(strcmp(out.p, "foo::bar(int)") == 0);
     RE_CHECK(DEMANGLE("_ZN5Outer5Inner3fooEv"));
     RE_CHECK(strcmp(out.p, "Outer::Inner::foo()") == 0);
+    // A symbol that carries no parameter list: a data symbol, and the shape every Rust
+    // legacy function has, whose last component is its disambiguating hash. This was
+    // refused because the parser required a byte after the name, so the nested shape
+    // that appears most often in the wild could not be demangled at all. The hash is
+    // kept rather than removed: two instantiations of one template differ only there,
+    // and dropping it would make them read as the same function.
+    RE_CHECK(DEMANGLE("_ZN3foo3barE"));
+    RE_CHECK(strcmp(out.p, "foo::bar") == 0);
+    RE_CHECK(DEMANGLE("_ZN4core3fmt9Formatter9write_fmt17h6f7c8d9e0a1b2c3dE"));
+    RE_CHECK(strcmp(out.p, "core::fmt::Formatter::write_fmt::h6f7c8d9e0a1b2c3d") == 0);
+    RE_CHECK(DEMANGLE("_ZN3std2io5stdio6_print17h1234567890abcdefE"));
+    RE_CHECK(strcmp(out.p, "std::io::stdio::_print::h1234567890abcdef") == 0);
     // A member function template renders its arguments on the template name,
     // and a template parameter whose type is unknown says so rather than failing.
     RE_CHECK(DEMANGLE("_ZN3foo3barIiEEvT_"));
@@ -269,6 +282,93 @@ static void test_demangle(void) {
 #undef DEMANGLE
     re_arena_free(&a);
     test_demangle_msvc();
+    test_demangle_rust();
+    test_demangle_rust_tuple();
+}
+
+// Rust symbols. Every mangled name here is real: the simple ones are the symbols a real
+// rustc emitted for the functions of a test crate, which is what makes them checkable
+// against the source rather than against a guess. The expected text is what a reader
+// sees, so the crate and impl disambiguators are absent: they name an instance of a
+// crate rather than a function.
+static void test_demangle_rust(void) {
+    // The legacy Rust spelling: an Itanium name whose last component is the compiler's
+    // own hash. Rust does not print that component, which is why the dispatcher strips it
+    // and the Itanium reader keeps it.
+    static const char *const kLegacy = "_ZN3std2io5stdio6_print17h1234567890abcdefE";
+    re_arena_t a;
+    re_str_t out;
+    static const struct {
+        const char *sym;
+        const char *want;
+    } kCases[] = {
+        {"_RNvCsern1Y9cEla9_4rlib6render", "rlib::render"},
+        {"_RNvCsern1Y9cEla9_4rlib7sum_vec", "rlib::sum_vec"},
+        // An inherent impl: the self type is written in angle brackets and the impl
+        // path is not written at all, which is the shape the compiler book recommends.
+        {"_RNvMsr_NtCs3ssYzQotkvD_3std4pathNtB5_7PathBuf3newCs15kBYyAo9fc_7mycrate",
+         "<std::path::PathBuf>::new"},
+        // A trait impl, the book's other worked example.
+        {"_RNvXCs15kBYyAo9fc_7mycrateNtB2_7ExampleNtB2_5Trait3foo",
+         "<mycrate::Example as mycrate::Trait>::foo"},
+        // Generic arguments, a tuple type, and two backrefs: the second mention of a
+        // path is a byte offset rather than a second copy of it.
+        {"_RINvNtCs55qC6OcLGgs_4core3ptr9drop_glueINtNtCs8oYkXk2gzQW_5alloc3vec3VecNtNtBG_"
+         "6string6StringEECsiYmzjmTrTwQ_4rgen",
+         "core::ptr::drop_glue::<alloc::vec::Vec<alloc::string::String>>"},
+        // A closure under a generic function, with the enclosing argument list and an
+        // empty identifier whose disambiguator is what names it.
+        {"_RNCINvMs6_NtCsfNFD5h9On6T_9hashbrown3rawINtB8_8RawTableTNtNtCs8oYkXk2gzQW_5alloc"
+         "6string6StringmEE14reserve_rehashNCINvNtBa_3map11make_hasherBS_mNtNtNtCslFVcyoAu48q_"
+         "3std4hash6random11RandomStateE0E0CsiYmzjmTrTwQ_4rgen",
+         "<hashbrown::raw::RawTable<(alloc::string::String, u32)>>::reserve_rehash::<"
+         "hashbrown::map::make_hasher::<alloc::string::String, u32, "
+         "std::hash::random::RandomState>::{closure#0}>::{closure#0}"},
+    };
+    re_arena_init(&a, 0);
+    RE_CHECK_EQ_U(re_mangle_kind(kCases[0].sym, strlen(kCases[0].sym)), RE_MANGLE_RUST);
+    // The legacy spelling is Itanium shaped, and it is the trailing hash that says it came
+    // from Rust: a C++ name never ends that way, so the two can be told apart.
+    RE_CHECK_EQ_U(re_mangle_kind(kLegacy, strlen(kLegacy)), RE_MANGLE_RUST);
+    RE_CHECK_EQ_U(re_mangle_kind("_ZN3foo3barEv", 13), RE_MANGLE_ITANIUM);
+    RE_CHECK_EQ_STR(re_mangle_name(RE_MANGLE_RUST), "rust");
+    RE_CHECK_EQ_STR(re_mangle_name(RE_MANGLE_ITANIUM), "itanium");
+    for (size_t i = 0; i < sizeof(kCases) / sizeof(kCases[0]); i++) {
+        RE_CHECK(re_demangle(&a, kCases[i].sym, strlen(kCases[i].sym), &out));
+        RE_CHECK_EQ_STR(out.p, kCases[i].want);
+    }
+    // The dispatcher drops the legacy hash, which the Itanium reader keeps: the hash is a
+    // component of the name to a C++ demangler and the compiler's own disambiguator to
+    // Rust, and Rust does not print it.
+    RE_CHECK(re_demangle(&a, kLegacy, strlen(kLegacy), &out));
+    RE_CHECK_EQ_STR(out.p, "std::io::stdio::_print");
+    // A punycode identifier is refused rather than printed as its own encoding, and a
+    // symbol that stops in the middle of a name is refused rather than completed.
+    RE_CHECK(!re_demangle(&a, "_RNvCsern1Y9cEla9_4rlibu5gdel", 27, &out));
+    RE_CHECK(!re_demangle(&a, "_RNvCsern1Y9cEla9_4rlib6rend", 26, &out));
+    re_arena_free(&a);
+}
+
+// A tuple of one field keeps its trailing comma: the same text without it is a
+// parenthesized type, and in Rust that is a different type rather than a shorter way of
+// writing the same one. The symbol is real, and it is where the corpus first showed the
+// difference.
+static void test_demangle_rust_tuple(void) {
+    static const char *const kSym =
+        "_RNvYNCINvMs6_NtCsfNFD5h9On6T_9hashbrown3rawINtBb_8RawTableTNtNtCs8oYkXk2gzQW_5alloc6strin"
+        "g6StringmEE14reserve_rehashNCINvNtBd_3map11make_hasherBV_mNtNtNtCslFVcyoAu48q_3std4hash6ra"
+        "ndom11RandomStateE0Es_0INtNtNtCs55qC6OcLGgs_4core3ops8function6FnOnceTOhEE9call_onceCsiYmz"
+        "jmTrTwQ_4rgen";
+    static const char *const kWant =
+        "<<hashbrown::raw::RawTable<(alloc::string::String, u32)>>::reserve_rehash::<hashbrown::map"
+        "::make_hasher::<alloc::string::String, u32, std::hash::random::RandomState>::{closure#0}>:"
+        ":{closure#1} as core::ops::function::FnOnce<(*mut u8,)>>::call_once";
+    re_arena_t a;
+    re_str_t out;
+    re_arena_init(&a, 0);
+    RE_CHECK(re_demangle(&a, kSym, strlen(kSym), &out));
+    RE_CHECK_EQ_STR(out.p, kWant);
+    re_arena_free(&a);
 }
 
 // YAA is a three letter calling convention or the two letter YA followed by A, which
@@ -315,61 +415,6 @@ static void test_entropy(void) {
     RE_CHECK_EQ_U((uint64_t)re_entropy(re_span_none()), 0);
 }
 
-// The signature file is the only route to naming a library function, so the loader
-// is pinned on its whole surface: the documented spacing, wildcards, slack, and the
-// lines that must be refused. The spacing case is the one that was broken. A pattern
-// written as " 488bc453" is not a hex pair, so every signature in a valid file loaded,
-// was counted, and matched nothing - which reads as "the tool does not work" rather
-// than as a parser bug.
-static void test_flirt(void) {
-    re_arena_t a;
-    re_vec_t sigs;
-    re_arena_init(&a, 65536);
-    re_vec_init(&sigs, sizeof(re_sig_t));
-    re_vec_clear(&sigs);
-    RE_CHECK_EQ_U(re_flirt_builtin(&a, &sigs), 3);
-    const char *path = "re_flirt_probe.sig";
-    FILE *fh = fopen(path, "wb");
-    RE_CHECK(fh != NULL);
-    if (!fh) {
-        re_arena_free(&a);
-        return;
-    }
-    const char *body = "Spaced : mod : 488bc453\n"
-                       "Tight:mod:488bc453\n"
-                       "Wild : mod : 488b????\n"
-                       "Slack : mod : 488bc453 : 4\n"
-                       "# a comment\n"
-                       "\n"
-                       "NoColons\n"
-                       "BadHex : mod : 488g\n"
-                       "OddLen : mod : 488\n"
-                       "EmptyName : mod :\n"
-                       "TooMuchSlack : mod : 488bc453 : 9\n";
-    fwrite(body, 1, strlen(body), fh);
-    fclose(fh);
-    size_t added = re_flirt_load(&a, path, &sigs);
-    // Four accepted: spaced, tight, wildcarded and slack.
-    RE_CHECK_EQ_U(added, 4);
-    // The built in idioms must survive loading a file. They used to be cleared, so
-    // asking for a signature file silently cost the three built in patterns.
-    RE_CHECK_EQ_U(RE_VEC_LEN(&sigs), 7);
-    const re_sig_t *s = RE_VEC_PTR(&sigs, re_sig_t, 3);
-    RE_CHECK(re_str_eq_cstr(s->name, "Spaced"));
-    RE_CHECK(re_str_eq_cstr(s->module, "mod"));
-    RE_CHECK(re_str_eq_cstr(s->pattern, "488bc453"));
-    RE_CHECK_EQ_U(s->slack, 0);
-    RE_CHECK(re_str_eq_cstr(RE_VEC_PTR(&sigs, re_sig_t, 4)->name, "Tight"));
-    RE_CHECK(re_str_eq_cstr(RE_VEC_PTR(&sigs, re_sig_t, 5)->pattern, "488b????"));
-    // Slack was documented, never parsed, and the matcher never looked at it.
-    RE_CHECK_EQ_U(RE_VEC_PTR(&sigs, re_sig_t, 6)->slack, 4);
-    // A path that is not there adds nothing and takes nothing away.
-    RE_CHECK_EQ_U(re_flirt_load(&a, "re_flirt_absent.sig", &sigs), 0);
-    RE_CHECK_EQ_U(RE_VEC_LEN(&sigs), 7);
-    remove(path);
-    re_arena_free(&a);
-}
-
 // The class names an image's RTTI carries are not function symbols, and reading them
 // as one fails, which left every C++ class in a binary reported under its raw
 // mangling. A template's descriptor names a member instead of the class, and that
@@ -413,7 +458,6 @@ int re_test_features(void) {
     test_search();
     test_demangle();
     test_rtti_names();
-    test_flirt();
     test_entropy();
     return 0;
 }

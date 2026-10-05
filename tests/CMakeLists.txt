@@ -13,7 +13,7 @@ add_test(NAME utils COMMAND re_test_utils)
 
 # The decoder suite is a separate binary so a length regression names itself in
 # the CTest output instead of hiding inside the utility suite.
-add_executable(re_test_disasm test_disasm.c)
+add_executable(re_test_disasm test_disasm.c test_disasm_vec.c)
 target_link_libraries(re_test_disasm PRIVATE re_core re_utils re_flags)
 if(MSVC)
     set_property(TARGET re_test_disasm
@@ -100,6 +100,86 @@ if(MSVC)
     target_compile_definitions(re_test_jr PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 add_test(NAME jr COMMAND re_test_jr)
+
+# The lowering suite is separate because a wrong IR shape still prints plausible
+# C, and only assertions on the ops themselves can tell a signed widening from
+# an unsigned one or a carried add from a dropped carry.
+add_executable(re_test_lower test_lower.c)
+target_link_libraries(re_test_lower PRIVATE re_core re_utils re_flags)
+if(MSVC)
+    set_property(TARGET re_test_lower
+        PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    target_compile_definitions(re_test_lower PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+add_test(NAME lower COMMAND re_test_lower)
+
+# The scoreboard suite is separate because a quality figure that silently stopped
+# measuring reads exactly like a good one, and only assertions on the axes with
+# known fixture answers can tell the difference.
+add_executable(re_test_score test_score.c)
+target_link_libraries(re_test_score PRIVATE re_core re_utils re_flags)
+if(MSVC)
+    set_property(TARGET re_test_score
+        PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    target_compile_definitions(re_test_score PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+add_test(NAME score COMMAND re_test_score)
+
+# The flow suite is separate because a transform that silently changed control
+# flow, or folded a value the machine never held, still prints plausible C.
+# Only assertions on hand built IR with known answers can tell a recovery pass
+# from a corruption pass.
+add_executable(re_test_flow test_flow.c)
+target_link_libraries(re_test_flow PRIVATE re_core re_utils re_flags)
+if(MSVC)
+    set_property(TARGET re_test_flow
+        PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    target_compile_definitions(re_test_flow PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+add_test(NAME flow COMMAND re_test_flow)
+
+# The naming suite is separate because a class name that quietly stopped landing
+# on functions reads exactly like an image with no RTTI, and only assertions on a
+# fixture whose slots and functions are known in advance can tell the difference.
+add_executable(re_test_names test_names.c)
+target_link_libraries(re_test_names PRIVATE re_core re_utils re_flags)
+if(MSVC)
+    set_property(TARGET re_test_names
+        PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    target_compile_definitions(re_test_names PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+add_test(NAME names COMMAND re_test_names)
+
+# The signature suite is separate because a matcher that has stopped matching, or an
+# index that has stopped finding, reads exactly like a database that holds nothing.
+add_executable(re_test_flirt test_flirt.c)
+target_link_libraries(re_test_flirt PRIVATE re_core re_utils re_flags)
+if(MSVC)
+    set_property(TARGET re_test_flirt
+        PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    target_compile_definitions(re_test_flirt PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+add_test(NAME flirt COMMAND re_test_flirt)
+
+# The naming chain end to end: a signature file in, a name in the report out. Both
+# halves have unit coverage, and only a run proves the halves are connected.
+add_test(NAME flirt_names
+    COMMAND ${CMAKE_COMMAND}
+        -DANTISTREFO=$<TARGET_FILE:antistrefo>
+        -DEMITTER=$<TARGET_FILE:re_test_cfg>
+        -DWORK=${CMAKE_CURRENT_BINARY_DIR}/re_flirt_fixture.sys
+        -DSIGS=${CMAKE_CURRENT_BINARY_DIR}/re_flirt_probe.sig
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/run_flirt_names.cmake)
+
+# The recovery cases reach the report or they do not: bytes the walk could not
+# decode, an overlapping body, a body past the instruction ceiling and a tail that
+# cannot return. Each is a field in the funcs output, and only a run proves it.
+add_test(NAME walk_quality
+    COMMAND ${CMAKE_COMMAND}
+        -DANTISTREFO=$<TARGET_FILE:antistrefo>
+        -DEMITTER=$<TARGET_FILE:re_test_cfg>
+        -DWORK=${CMAKE_CURRENT_BINARY_DIR}/re_walk_fixture.sys
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/run_walk_quality.cmake)
 
 # The PE suite is separate because "is this address code or data" is the question a
 # wrong answer to makes every later pass quietly wrong, and the fixture it shares with

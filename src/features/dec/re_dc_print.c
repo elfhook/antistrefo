@@ -1,9 +1,8 @@
 // re_dc_print.c - turning varnodes and ops into text.
 // Module: feature (C11).
 // Owns: the name tables, the value renderer, and the one statement writer.
-// Depends: re_dc_print.h. No x86 detail: a register is named by the backend.
-// Depends: re_dc_print.h. No x86 detail appears here: a register is named by the
-//       backend through the vtable, and nothing else knows what an instruction is.
+// Depends: re_dc_print.h, re_disasm. A register is named through the vtable, so no
+//           x86 detail appears here and a new arch needs no change to this file.
 #include "features/dec/re_dc_print.h"
 
 #include "features/meta/re_disasm.h"
@@ -11,7 +10,61 @@
 #include <stdio.h>
 #include <string.h>
 
-// in one statement cannot collide.
+// One stack displacement's entry, found or taken in address order so the
+// declarations print sorted without a second pass. The widest width wins,
+// because a byte write into a slot a qword also touches is the qword local
+// with a subfield written, which is how a C programmer reads it too.
+static int sw_find(const re_dc_emit_t *e, int16_t disp) {
+    for (uint32_t i = 0; i < e->n_sw; i++)
+        if (e->sw_disp[i] == disp)
+            return (int)i;
+    return -1;
+}
+
+static void sw_learn(re_dc_emit_t *e, int16_t disp, uint16_t w) {
+    uint32_t i;
+    int at = sw_find(e, disp);
+    if (at >= 0) {
+        if ((uint16_t)e->sw_w[at] < w)
+            e->sw_w[at] = (uint8_t)w;
+        return;
+    }
+    if (e->n_sw >= RE_SLOT_MAX)
+        return;
+    // Insert in order, so the table is sorted for the declarations.
+    for (i = e->n_sw; i > 0 && e->sw_disp[i - 1] > disp; i--) {
+        e->sw_disp[i] = e->sw_disp[i - 1];
+        e->sw_w[i] = e->sw_w[i - 1];
+    }
+    e->sw_disp[i] = disp;
+    e->sw_w[i] = (uint8_t)w;
+    e->n_sw++;
+}
+
+// The widths a body actually used, learned before anything is printed. Every
+// load and store is asked for its access width and its address, and a stack
+// varnode used directly as an address counts at its own width too.
+void re_dc_learn_widths(re_dc_emit_t *e, const re_ir_func_t *ir) {
+    for (size_t bi = 0; bi < ir->n_blocks; bi++) {
+        const re_ir_block_t *blk = &ir->blocks[bi];
+        for (size_t k = 0; k < blk->n_ops; k++) {
+            const re_ir_op_t *op = &blk->ops[k];
+            if (op->op == RE_OP_LOAD) {
+                if (op->in[0].space == RE_SPACE_STACK)
+                    sw_learn(e, (int16_t)op->in[0].offset, op->out.size);
+            } else if (op->op == RE_OP_STORE) {
+                if (op->in[2].space == RE_SPACE_STACK)
+                    sw_learn(e, (int16_t)op->in[2].offset, op->in[0].size);
+            }
+        }
+    }
+}
+
+uint8_t re_dc_slot_width(const re_dc_emit_t *e, int16_t disp) {
+    int at = sw_find(e, disp);
+    return at >= 0 ? e->sw_w[at] : 0;
+}
+
 const char *re_dc_local(re_dc_emit_t *e, int16_t disp) {
     unsigned m = disp < 0 ? (unsigned)(-(int)disp) : (unsigned)disp;
     snprintf(e->lname, (size_t)RE_DC_TEXT, "%s%u", disp < 0 ? "local_m" : "local_p", m);
@@ -43,6 +96,17 @@ const char *re_dc_val(re_dc_emit_t *e, re_varnode_t vn, char *scratch) {
                                                                 : "cond";
     if (vn.space == RE_SPACE_STACK) {
         snprintf(scratch, RE_DC_TEXT, "&%s", re_dc_local(e, (int16_t)vn.offset));
+        return scratch;
+    }
+    if (vn.space == RE_SPACE_FLAG) {
+        static const char *const kFlags[6] = {"cf", "zf", "sf", "of", "pf", "af"};
+        snprintf(scratch, RE_DC_TEXT, "%s", vn.offset < 6 ? kFlags[vn.offset] : "flag");
+        return scratch;
+    }
+    if (vn.space == RE_SPACE_IOP) {
+        // A thread environment block access on Windows: the segment relative
+        // offset is the identity of the location, so the offset is the name.
+        snprintf(scratch, RE_DC_TEXT, "teb_%#x", (unsigned)vn.offset);
         return scratch;
     }
     if (vn.space == RE_SPACE_REG && vn.offset < RE_DC_REGS && e->reg[vn.offset].p)
@@ -86,11 +150,49 @@ void re_dc_fmt(char *dst, size_t cap, const char *fmt, ...) {
     va_end(ap);
 }
 
+// The stack strings the deobfuscation pass decoded, printed as comments before
+// the body. They name a literal the machine builds one store at a time, which
+// is exactly the fact a reader cannot see in the statements that follow.
+void re_dc_stackstrs(re_dc_emit_t *e, const re_flow_stat_t *fl) {
+    for (size_t i = 0; i < RE_VEC_LEN(&fl->strs); i++) {
+        const re_flow_str_t *s = RE_VEC_PTR(&fl->strs, re_flow_str_t, i);
+        re_strbuf_puts(e->o, "    // stack string at ");
+        re_strbuf_put_hex64(e->o, s->at, 16);
+        re_strbuf_puts(e->o, ": \"");
+        re_strbuf_puts(e->o, s->text);
+        re_strbuf_puts(e->o, "\"\n");
+        e->n_stmts++;
+    }
+}
+
+// One unlowered instruction: a comment carrying its address and text, never
+// dropped. Silence would read as "nothing happens here", which is how a
+// reader is misled about a function.
+void re_dc_unlowered(re_dc_emit_t *e, const re_insn_t *in) {
+    re_strbuf_t txt;
+    re_strbuf_init(&txt, e->a);
+    e->dis->render(e->dis->ctx, in, e->a, &txt);
+    re_strbuf_puts(e->o, "    // ");
+    re_strbuf_put_hex64(e->o, in->addr, 16);
+    re_strbuf_putc(e->o, ' ');
+    re_strbuf_puts(e->o, txt.p ? txt.p : "?");
+    re_strbuf_puts(e->o, "\n");
+    e->n_unknown++;
+    e->n_stmts++;
+}
+
+// The indentation a line of a structured body sits at: one step of four spaces per
+// open brace. The flat printer leaves indent at zero, so its output is unchanged.
+static void put_indent(re_dc_emit_t *e) {
+    for (uint32_t i = 0; i < e->indent; i++)
+        re_strbuf_puts(e->o, "    ");
+}
+
 void re_dc_stmt(re_dc_emit_t *e, const char *fmt, ...) {
     va_list ap;
     if (e->n_stmts && e->n_stmts % 6 == 0)
         re_strbuf_puts(e->o, "\n");
-    re_strbuf_puts(e->o, "    ");
+    put_indent(e);
     va_start(ap, fmt);
     {
         char buf[160];
@@ -99,6 +201,20 @@ void re_dc_stmt(re_dc_emit_t *e, const char *fmt, ...) {
     }
     va_end(ap);
     re_strbuf_puts(e->o, ";\n");
+    e->n_stmts++;
+}
+
+void re_dc_line(re_dc_emit_t *e, const char *fmt, ...) {
+    va_list ap;
+    put_indent(e);
+    va_start(ap, fmt);
+    {
+        char buf[160];
+        vsnprintf(buf, sizeof(buf), fmt, ap);
+        re_strbuf_puts(e->o, buf);
+    }
+    va_end(ap);
+    re_strbuf_puts(e->o, "\n");
     e->n_stmts++;
 }
 
@@ -126,9 +242,66 @@ const char *re_dc_binop(re_op_kind_t k) {
             return "<<";
         case RE_OP_INTSHR:
             return ">>";
+        case RE_OP_INTUDIV:
+            return "/";
+        case RE_OP_INTUMOD:
+            return "%";
+        case RE_OP_FADD:
+            return "+";
+        case RE_OP_FSUB:
+            return "-";
+        case RE_OP_FMUL:
+            return "*";
+        case RE_OP_FDIV:
+            return "/";
         default:
             return NULL;
     }
+}
+
+// The ops without a C operator become calls to named helpers, which is honest:
+// the reader sees an operation the source language has no symbol for, spelled
+// the way the architecture manual spells it.
+const char *re_dc_fnop(re_op_kind_t k) {
+    switch (k) {
+        case RE_OP_ROL:
+            return "rotl";
+        case RE_OP_ROR:
+            return "rotr";
+        case RE_OP_UMULH:
+            return "umulh";
+        case RE_OP_IMULH:
+            return "imulh";
+        case RE_OP_POPCNT:
+            return "popcnt";
+        case RE_OP_LZCNT:
+            return "lzcnt";
+        case RE_OP_TZCNT:
+            return "tzcnt";
+        case RE_OP_BSWAP:
+            return "bswap";
+        case RE_OP_BITNOT:
+            return "bitnot";
+        case RE_OP_MEMCPY:
+            return "memcpy";
+        case RE_OP_MEMSET:
+            return "memset";
+        default:
+            return NULL;
+    }
+}
+
+// The float type a cast or a declaration prints, by width.
+const char *re_dc_ftype(uint16_t size) {
+    return size == 8 ? "double" : "float";
+}
+
+// The name of a condition the emitter could not resolve to an expression: the
+// x86 condition itself, so the reader knows exactly which flag bits mattered.
+const char *re_dc_ccname(unsigned cc) {
+    static const char *const k[16] = {"jo", "jno", "jb", "jae", "je", "jne", "jbe", "ja",
+                                      "js", "jns", "jp", "jnp", "jl", "jge", "jle", "jg"};
+    return cc < 16 ? k[cc] : "cc";
 }
 
 const char *re_dc_ccop(unsigned cc) {
@@ -171,12 +344,57 @@ const char *re_dc_type(uint16_t size) {
     }
 }
 
-// A call target is printed by name when the xref index has one, because the name is
-// the reason anyone reads the output. A target with no name is printed as an address,
-// which is honest. The arguments are the registers written since the previous call,
-// which is the defensible reading of what was passed: the callee's own parameter
-// registers say nothing about an arbitrary call's arguments, and printing those would
-// be a plausible looking wrong answer. rax is excluded because the previous call
-// One op becomes one statement. The op is already lowered, so this is purely a
-// question of which C shape fits, and the answer is driven by the op kind rather
-// than by the instruction, which is why no x86 detail appears in this function.
+// The printed condition for a branch whose four bit condition is cc, read against
+// the flag writer the lowering recorded. A real comparison decides the full
+// condition set; a test decides zero and sign of its bitwise and; every result
+// writing form decides zero and sign of the result it printed. Anything else is
+// not derivable, and the caller prints an honest flag name instead of a plausible
+// comparison that would be a wrong answer.
+bool re_dc_flag_expr(const re_dc_emit_t *e, unsigned cc, char *out, size_t cap) {
+    const char *l = e->cmp_l;
+    const char *r = e->cmp_r;
+    switch (e->flag_writer) {
+        case RE_SETF_CMP:
+            if (cc == RE_CC_JE)
+                return re_dc_fmt(out, cap, "%s == %s", l, r), true;
+            if (cc == RE_CC_JNE)
+                return re_dc_fmt(out, cap, "%s != %s", l, r), true;
+            if (cc == RE_CC_JB || cc == RE_CC_JBE || cc == RE_CC_JA || cc == RE_CC_JAE)
+                return re_dc_fmt(out, cap, "%s %s %s", l,
+                                 cc == RE_CC_JB    ? "<"
+                                 : cc == RE_CC_JBE ? "<="
+                                 : cc == RE_CC_JA  ? ">"
+                                                   : ">=",
+                                 r),
+                       true;
+            if (cc == RE_CC_JL || cc == RE_CC_JLE || cc == RE_CC_JG || cc == RE_CC_JGE)
+                return re_dc_fmt(out, cap, "(int64_t)%s %s (int64_t)%s", l,
+                                 cc == RE_CC_JL    ? "<"
+                                 : cc == RE_CC_JLE ? "<="
+                                 : cc == RE_CC_JG  ? ">"
+                                                   : ">=",
+                                 r),
+                       true;
+            return false;
+        case RE_SETF_TEST:
+            if (cc == RE_CC_JE)
+                return re_dc_fmt(out, cap, "(%s & %s) == 0", l, r), true;
+            if (cc == RE_CC_JNE)
+                return re_dc_fmt(out, cap, "(%s & %s) != 0", l, r), true;
+            if (cc == RE_CC_JS)
+                return re_dc_fmt(out, cap, "(int64_t)(%s & %s) < 0", l, r), true;
+            if (cc == RE_CC_JNS)
+                return re_dc_fmt(out, cap, "(int64_t)(%s & %s) >= 0", l, r), true;
+            return false;
+        default:
+            if (cc == RE_CC_JE)
+                return re_dc_fmt(out, cap, "%s == 0", l), true;
+            if (cc == RE_CC_JNE)
+                return re_dc_fmt(out, cap, "%s != 0", l), true;
+            if (cc == RE_CC_JS)
+                return re_dc_fmt(out, cap, "(int64_t)%s < 0", l), true;
+            if (cc == RE_CC_JNS)
+                return re_dc_fmt(out, cap, "(int64_t)%s >= 0", l), true;
+            return false;
+    }
+}

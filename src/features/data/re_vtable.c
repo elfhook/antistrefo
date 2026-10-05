@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "features/lib/re_demangle.h"
+#include "features/lib/re_demangle_rtti.h"
 #include "utils/text/re_str.h"
 
 // The Complete Object Locator, as MSVC lays it out on x64. Everything in it is an
@@ -27,6 +28,31 @@ static bool rd32(const re_pe_t *pe, uint32_t rva, uint32_t *v) {
         return false;
     *v = (uint32_t)pe->img.p[off] | ((uint32_t)pe->img.p[off + 1] << 8) |
          ((uint32_t)pe->img.p[off + 2] << 16) | ((uint32_t)pe->img.p[off + 3] << 24);
+    return true;
+}
+
+// The eight byte form, for the locator pointer the slot before a vtable holds.
+static bool rd64(const re_pe_t *pe, uint32_t rva, uint64_t *v) {
+    uint32_t lo = 0, hi = 0;
+    if (!rd32(pe, rva, &lo) || !rd32(pe, rva + 4u, &hi))
+        return false;
+    *v = (uint64_t)lo | ((uint64_t)hi << 32);
+    return true;
+}
+
+// One 8 byte slot, normalised to an rva. A relocated image carries a full virtual
+// address, which the image base turns back; a file whose table was written as base
+// relative rvas reads as a small number and is used as it stands. Both forms exist
+// in the wild, and the image base is what tells them apart.
+static bool slot_ptr(const re_pe_t *pe, uint32_t rva, uint32_t *out) {
+    uint64_t ptr = 0;
+    if (!rd64(pe, rva, &ptr))
+        return false;
+    if (ptr >= pe->image_base && ptr - pe->image_base < pe->size_of_image)
+        ptr -= pe->image_base;
+    if (ptr > 0xFFFFFFFFu)
+        return false;
+    *out = (uint32_t)ptr;
     return true;
 }
 
@@ -51,21 +77,21 @@ bool re_vtable_col_at(const re_pe_t *pe, uint32_t rva, uint32_t *td_rva, uint32_
     return true;
 }
 
-// A TypeDescriptor ends with the mangled class name, and the two rvas before that name
-// are the type_info vtable the runtime uses for its own comparisons. Requiring the
-// name to start with one of the four mangling prefixes is what separates a real type
-// descriptor from any other structure that happens to sit in the data section.
+// A TypeDescriptor ends with the mangled class name, and the two pointers before
+// that name are the type_info vtable the runtime uses for its own comparisons and
+// the spare it compares it against. Requiring the name to start with one of the four
+// mangling prefixes is what separates a real type descriptor from any other structure
+// that happens to sit in the data section.
 static bool td_name(const re_pe_t *pe, uint32_t td_rva, re_str_t *out) {
-    // A TypeDescriptor is two 64-bit pointers and then the name: the vtable the runtime
-    // dispatches type_info through, and a spare it compares. On x64 each pointer is
-    // eight bytes, so they sit at +0 and +8 and the name at +16. Reading +8 and +12
-    // gets the high half of the spare, which is zero in every real image, and so
-    // rejected every descriptor there is.
+    // A TypeDescriptor is two 64-bit pointers and then the name. The spare is null
+    // in every real image, which is a fact about the runtime and not a defect, so
+    // only the first pointer is required to name something; two identical pointers
+    // would be a copy of the same word twice, which no real descriptor is.
     uint32_t lo1 = 0, hi1 = 0, lo2 = 0, hi2 = 0;
     if (!rd32(pe, td_rva, &lo1) || !rd32(pe, td_rva + 4u, &hi1) || !rd32(pe, td_rva + 8u, &lo2) ||
         !rd32(pe, td_rva + 12u, &hi2))
         return false;
-    if (lo1 == 0 || lo2 == 0 || (lo1 == lo2 && hi1 == hi2))
+    if (lo1 == 0 || (lo1 == lo2 && hi1 == hi2))
         return false;
     uint32_t name_rva = td_rva + 16u;
     uint64_t off = 0;
@@ -99,7 +125,11 @@ static re_str_t class_name(re_arena_t *a, const re_pe_t *pe, uint32_t td_rva, bo
     if (!td_name(pe, td_rva, &raw))
         return re_str("");
     re_str_t out;
-    if (re_demangle(a, raw.p, raw.n, &out) && out.n) {
+    // The descriptor name is its own format, not a function symbol: the generic
+    // demangler refuses ".?AVFoo@@" on sight, and the wrapper must go through the
+    // reader that knows it. Falling back to the raw text keeps a name where a
+    // template descriptor defeated the reader, still marked undemangled.
+    if (re_demangle_rtti(a, raw.p, raw.n, &out) && out.n) {
         *demangled = true;
         *got = true;
         return out;
@@ -146,7 +176,7 @@ static uint32_t vtable_len(const re_pe_t *pe, const re_code_t *code, uint32_t rv
     uint32_t n = 0;
     while (n < max) {
         uint32_t v = 0;
-        if (!rd32(pe, rva + n * 8u, &v))
+        if (!slot_ptr(pe, rva + n * 8u, &v))
             break;
         const re_pe_section_t *s = re_pe_section_at_rva(pe, v);
         if (!s || !re_code_in_code(code, pe->image_base + v))
@@ -159,7 +189,7 @@ static uint32_t vtable_len(const re_pe_t *pe, const re_code_t *code, uint32_t rv
 bool re_vtable_entry(const re_pe_t *pe, const re_vtable_t *v, uint32_t i, uint32_t *out) {
     if (i >= v->n_entries)
         return false;
-    return rd32(pe, v->rva + i * 8u, out);
+    return slot_ptr(pe, v->rva + i * 8u, out);
 }
 
 void re_vtable_scan(const re_pe_t *pe, const re_code_t *code, re_arena_t *a, re_vset_t *out) {
@@ -177,7 +207,7 @@ void re_vtable_scan(const re_pe_t *pe, const re_code_t *code, re_arena_t *a, re_
             uint32_t col_rva = sec->vaddr + i * 8u;
             uint32_t td = 0, bcd = 0;
             uint32_t target = 0;
-            if (!rd32(pe, col_rva, &target))
+            if (!slot_ptr(pe, col_rva, &target))
                 continue;
             if (!re_vtable_col_at(pe, target, &td, &bcd))
                 continue;

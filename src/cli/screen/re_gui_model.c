@@ -32,30 +32,47 @@ void re_gui_funcs_fill(re_gui_funcs_t *l, re_arena_t *a, const re_analysis_t *an
         l->name[l->n] = re_arena_strdup(a, nm);
         l->n++;
     }
-    l->vis = RE_GUI_LIST_ROWS;
-    if (l->vis > l->n)
-        l->vis = l->n;
+    re_gui_funcs_fit(l, RE_GUI_LIST_ROWS);
 }
 
-static size_t window_half(const re_gui_funcs_t *l) {
-    return l->vis > 2u ? l->vis / 2u : 0u;
+void re_gui_funcs_fit(re_gui_funcs_t *l, size_t rows) {
+    if (rows > RE_GUI_LIST_ROWS)
+        rows = RE_GUI_LIST_ROWS;
+    if (rows > l->n)
+        rows = l->n;
+    l->vis = rows;
+}
+
+// Where the window starts. It follows the selection down to the middle of the pane and
+// then stops at the last window that still holds it, so the last function lands on the
+// last row instead of the list scrolling past its end. A pane the whole list fits in
+// never moves at all.
+static size_t window_base(size_t sel, const re_gui_funcs_t *l) {
+    if (!l->vis || l->vis >= l->n)
+        return 0;
+    size_t half = l->vis > 2u ? l->vis / 2u : 0u;
+    size_t base = sel > half ? sel - half : 0u;
+    size_t last = l->n - l->vis;
+    return base > last ? last : base;
 }
 
 size_t re_gui_funcs_row(size_t sel, const re_gui_funcs_t *l) {
-    size_t half = window_half(l);
-    return sel >= half ? half : sel;
+    size_t base = window_base(sel, l);
+    return sel > base ? sel - base : 0u;
 }
 
 size_t re_gui_funcs_index(size_t sel, const re_gui_funcs_t *l, size_t row) {
-    size_t half = window_half(l);
-    size_t idx = (sel >= half ? sel - half : 0u) + row;
+    size_t idx = window_base(sel, l) + row;
     if (l->n && idx >= l->n)
         return l->n - 1u;
     return idx;
 }
 
 void re_gui_funcs_window(size_t sel, const re_gui_funcs_t *l, const char **rows, size_t cap) {
-    for (size_t i = 0; i < l->vis && i < cap; i++) {
+    // A list with no rows to show still has one row to draw, and it is the row that says
+    // so, so a caller is never handed an array with a hole in its first slot.
+    size_t n = l->vis ? l->vis : 1u;
+    for (size_t i = 0; i < n && i < cap; i++) {
         size_t idx = re_gui_funcs_index(sel, l, i);
         rows[i] = l->n ? l->name[idx] : "(no functions)";
     }

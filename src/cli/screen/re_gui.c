@@ -25,10 +25,6 @@
 #include <stdio.h>
 #include <string.h>
 
-// How much a listing holds at once. Bounded rather than sized to the file, because a
-// pane has a fixed number of rows and a function can be longer than any of them.
-#define LIST_ROWS RE_GUI_LIST_ROWS
-
 // The pages on the body's top edge. The list of functions stays on the left for all
 // of them; the right pane is what changes.
 #define RE_PAGE_COUNT 6u
@@ -57,7 +53,7 @@ typedef struct gui {
     uint8_t tabs_drawn;
     uint8_t row_zone;
     uint8_t rows_drawn;
-    page_arg_t row_arg[LIST_ROWS];
+    page_arg_t row_arg[RE_GUI_LIST_ROWS];
     bool repaint; // the page changed, so the next frame is a full console clear
     size_t page_off;
     size_t page_rows;
@@ -144,7 +140,7 @@ static void body_for(gui_t *g, re_arena_t *a, re_gui_listing_t *ls, pseudo_t *ps
     const re_func_t *f = re_func_at(&g->an.scan, sel);
     const re_pe_t *pe = g->an.has_pe ? &g->an.pe : NULL;
     const re_vset_t *vs = NULL;
-    size_t pane = rows > 3u ? (size_t)rows - 3u : 1u;
+    size_t pane = re_layout_body_rows(rows);
     if (g->page_for != g->tab || g->page_sel != sel) {
         g->page_for = g->tab;
         g->page_sel = sel;
@@ -196,8 +192,8 @@ static void compose(re_screen_t *s, gui_t *g, const re_gui_funcs_t *l) {
         return;
     }
 
-    const char *lrows[LIST_ROWS];
-    re_gui_funcs_window(g->sel, l, lrows, LIST_ROWS);
+    const char *lrows[RE_GUI_LIST_ROWS];
+    re_gui_funcs_window(g->sel, l, lrows, RE_GUI_LIST_ROWS);
 
     L.file = g->path;
     L.list_title = "Functions";
@@ -219,7 +215,7 @@ static void compose(re_screen_t *s, gui_t *g, const re_gui_funcs_t *l) {
     g->tabs_drawn = L.tabs_drawn;
     g->row_zone = L.row_zone;
     g->rows_drawn = L.rows_drawn;
-    for (size_t i = 0; i < g->rows_drawn && i < LIST_ROWS; i++) {
+    for (size_t i = 0; i < g->rows_drawn && i < RE_GUI_LIST_ROWS; i++) {
         g->row_arg[i].g = g;
         g->row_arg[i].index = re_gui_funcs_index(g->sel, l, i);
     }
@@ -348,7 +344,7 @@ static void bind_actions(gui_t *g) {
         re_ui_bind(&g->ui, (uint8_t)(g->tab_zone + i), on_page, NULL, &g->page_arg[i]);
     }
     if (g->row_zone != RE_SCREEN_ZONE_NONE)
-        for (size_t i = 0; i < g->rows_drawn && i < LIST_ROWS; i++)
+        for (size_t i = 0; i < g->rows_drawn && i < RE_GUI_LIST_ROWS; i++)
             re_ui_bind(&g->ui, (uint8_t)(g->row_zone + i), on_row, NULL, &g->row_arg[i]);
 }
 
@@ -383,6 +379,9 @@ static bool turn(gui_t *g, re_arena_t *a, re_screen_t *frame, re_gui_funcs_t *li
                  re_gui_listing_t *ls, pseudo_t *ps) {
     if (list->n && g->sel >= list->n)
         g->sel = list->n - 1u;
+    // The list takes every row the body has, so a taller terminal shows more functions
+    // rather than a fixed slice of them with blank rows under it.
+    re_gui_funcs_fit(list, re_layout_body_rows(frame->rows));
     body_for(g, a, ls, ps, g->sel, frame->rows);
     compose(frame, g, list);
     bind_actions(g);

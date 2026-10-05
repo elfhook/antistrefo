@@ -18,79 +18,13 @@
 #include "utils/text/re_hex.h"
 #include "utils/text/re_str.h"
 
-typedef struct {
-    const char *name;
-    const char *bytes; // escaped hex, two characters per byte
-    uint8_t len;       // instruction length in bytes
-    bool call;
-    bool branch;
-    bool cond;
-    bool ret;
-} vec_t;
-
 // This suite is its own binary, so it owns its counters.
 int re_test_count = 0;
 int re_test_fail = 0;
 
-// Every vector is a real encoding. The lengths are the whole point: a wrong length
-// desynchronises every instruction after it, so they are pinned one at a time.
-static const vec_t kVec[] = {
-    {"push rbp", "55", 1, false, false, false, false},
-    {"pop rbp", "5d", 1, false, false, false, false},
-    {"mov rbp,rsp", "4889e5", 3, false, false, false, false},
-    {"mov rbp,rsp via mov", "488bec", 3, false, false, false, false},
-    {"sub rsp,0x28", "4883ec28", 4, false, false, false, false},
-    {"sub rsp,0x1234", "4881ec34120000", 7, false, false, false, false},
-    {"add rsp,0x28", "4883c428", 4, false, false, false, false},
-    {"leave", "c9", 1, false, false, false, false},
-    {"ret", "c3", 1, false, false, false, true},
-    {"ret 0x10", "c21000", 3, false, false, false, true},
-    {"endbr64", "f30f1efa", 4, false, false, false, false},
-    {"nop", "90", 1, false, false, false, false},
-    {"multi byte nop", "0f1f440000", 5, false, false, false, false},
-    {"int3", "cc", 1, false, false, false, false},
-    {"call rel32", "e801000000", 5, true, false, false, false},
-    {"jmp rel8", "eb01", 2, false, true, false, false},
-    {"jmp rel32", "e901000000", 5, false, true, false, false},
-    {"je rel8", "7401", 2, false, true, true, false},
-    {"jne rel8", "7501", 2, false, true, true, false},
-    {"je rel32", "0f8401000000", 6, false, true, true, false},
-    {"jg rel32", "0f8f01000000", 6, false, true, true, false},
-    {"loop", "e2fe", 2, false, true, true, false},
-    {"mov eax,imm32", "b811223344", 5, false, false, false, false},
-    {"movabs rax,imm64", "48b81122334455667788", 10, false, false, false, false},
-    {"mov al,imm8", "b011", 2, false, false, false, false},
-    {"mov rax,[rip+0x1234]", "488b0534120000", 7, false, false, false, false},
-    {"mov rax,[rbp+8]", "488b4508", 4, false, false, false, false},
-    {"mov rax,[rbp-8]", "488b45f8", 4, false, false, false, false},
-    {"mov rbx,[rsp+0x28]", "488b5c2428", 5, false, false, false, false},
-    {"mov [rbp-0x28],rbx", "48895dd8", 4, false, false, false, false},
-    {"cmp qword [rbp+0x20],0", "48837d2000", 5, false, false, false, false},
-    {"cmp byte [rax],0", "803800", 3, false, false, false, false},
-    {"movzx eax,byte [rax]", "0fb600", 3, false, false, false, false},
-    {"test eax,eax", "85c0", 2, false, false, false, false},
-    {"movsxd rax,dword [rbp+4]", "48634504", 4, false, false, false, false},
-    {"imul eax,[rbp+4],3", "69450403000000", 7, false, false, false, false},
-    {"push imm32", "6811223344", 5, false, false, false, false},
-    {"xchg rax,rbx", "4893", 2, false, false, false, false},
-    {"bswap rax", "480fc8", 3, false, false, false, false},
-    {"xorps xmm0,xmm0", "0f57c0", 3, false, false, false, false},
-    {"setz al", "0f94c0", 3, false, false, false, false},
-    {"cmovz rax,rbx", "480f44c3", 4, false, false, false, false},
-    {"syscall", "0f05", 2, false, false, false, false},
-    {"ud2", "0f0b", 2, false, false, false, false},
-    {"cpuid", "0fa2", 2, false, false, false, false},
-    {"rdtsc", "0f31", 2, false, false, false, false},
-    {"mov gs:[0x60],rax", "654889342560000000", 9, false, false, false, false},
-    {"opsize 16 mov ax,[rax]", "668b07", 3, false, false, false, false},
-    {"addrsize 32 mov eax,[eax]", "678b00", 3, false, false, false, false},
-    {"lock inc dword [rax]", "f0ff00", 3, false, false, false, false},
-    {"vzeroupper", "c5f877", 3, false, false, false, false},
-    {"vmovdqu ymm0,[rax]", "c5fe6f00", 4, false, false, false, false},
-    {"call through rax", "ffd0", 2, true, false, false, false},
-    {"jmp through rax", "ffe0", 2, false, true, false, false},
-    {"call through [rax]", "ff10", 2, true, false, false, false},
-};
+// The pinned encodings live in test_disasm_vec.c, which owns the table and the
+// runner; the split is only about the file cap, not about the seam.
+void re_disasm_vec_run(const re_disasm_t *dis);
 
 static const re_disasm_t *g_x64;
 
@@ -100,46 +34,6 @@ static uint8_t nib(char c) {
     if (c >= '0' && c <= '9')
         return (uint8_t)(c - '0');
     return (uint8_t)(c - 'a' + 10);
-}
-
-static void test_vectors(void) {
-    for (size_t v = 0; v < sizeof(kVec) / sizeof(kVec[0]); v++) {
-        const vec_t *t = &kVec[v];
-        uint8_t buf[16];
-        re_insn_t in;
-        size_t n = (size_t)t->len;
-        if (n * 2u != (size_t)re_str(t->bytes).n) {
-            re_test_count++;
-            re_test_fail++;
-            printf("FAIL %s: len %u does not match \"%s\"\n", t->name, t->len, t->bytes);
-            fflush(stdout);
-            continue;
-        }
-        for (size_t i = 0; i < n; i++)
-            buf[i] = (uint8_t)((nib(t->bytes[i * 2]) << 4) | nib(t->bytes[i * 2 + 1]));
-        if (!g_x64->decode(g_x64->ctx, 0x140001000ULL, re_span(buf, n), &in)) {
-            re_test_count++;
-            re_test_fail++;
-            printf("FAIL %s: decode refused \"%s\"\n", t->name, t->bytes);
-            fflush(stdout);
-            continue;
-        }
-        re_test_count++;
-        if (in.size != t->len) {
-            re_test_fail++;
-            printf("FAIL %s: length %u, want %u (%s)\n", t->name, in.size, t->len, t->bytes);
-            fflush(stdout);
-        }
-        if (in.is_call != t->call || in.is_branch != t->branch || in.is_conditional != t->cond ||
-            in.is_return != t->ret) {
-            re_test_fail++;
-            printf("FAIL %s: flags c=%d b=%d cond=%d ret=%d, want c=%d b=%d cond=%d "
-                   "ret=%d\n",
-                   t->name, in.is_call, in.is_branch, in.is_conditional, in.is_return, t->call,
-                   t->branch, t->cond, t->ret);
-            fflush(stdout);
-        }
-    }
 }
 
 // The addresses a relative branch resolves to. A branch that lands somewhere
@@ -329,66 +223,74 @@ static void test_lowering_ops(re_arena_t *a) {
     RE_CHECK_EQ_U((uint64_t)lower1("48c7c001000000", a), RE_OP_CONST); // mov rax,1
     RE_CHECK_EQ_U((uint64_t)lower1("488b0512345678", a), RE_OP_LOAD);  // mov rax,[rip+..]
     RE_CHECK_EQ_U((uint64_t)lower1("488d0512345678", a), RE_OP_VAR);   // lea rax,[rip+..]
-    // The group form takes its operation from the reg field, and the two carry forms
-    // are deliberately not modelled, so each of the eight is pinned separately.
-    RE_CHECK_EQ_U((uint64_t)lower1("4883c028", a), RE_OP_INTADD); // /0 add
-    RE_CHECK_EQ_U((uint64_t)lower1("4883c828", a), RE_OP_INTOR);  // /1 or
-    RE_CHECK_EQ_U((uint64_t)lower1("4883d028", a), (uint64_t)-1); // /2 adc
-    RE_CHECK_EQ_U((uint64_t)lower1("4883d828", a), (uint64_t)-1); // /3 sbb
-    RE_CHECK_EQ_U((uint64_t)lower1("4883e028", a), RE_OP_INTAND); // /4 and
-    RE_CHECK_EQ_U((uint64_t)lower1("4883e828", a), RE_OP_INTSUB); // /5 sub
-    RE_CHECK_EQ_U((uint64_t)lower1("4883f028", a), RE_OP_INTXOR); // /6 xor
-    RE_CHECK_EQ_U((uint64_t)lower1("4883f828", a), RE_OP_CMP);    // /7 cmp
-    // A compare against a register, and the zero test, are both comparisons, but the
-    // zero test also emits the constant it compares against.
+    // The group form takes its operation from the reg field, and every result
+    // writing form ends on the hidden comparison the next branch reads, so the
+    // last op is a CMP for seven of the eight and the counts say what expanded.
+    RE_CHECK_EQ_U((uint64_t)lower1("4883c028", a), RE_OP_CMP); // /0 add
+    RE_CHECK_EQ_U((uint64_t)lower1("4883c828", a), RE_OP_CMP); // /1 or
+    RE_CHECK_EQ_U((uint64_t)lower1("4883d028", a), RE_OP_CMP); // /2 adc, carry read inside
+    RE_CHECK_EQ_U((uint64_t)lower1("4883d828", a), RE_OP_CMP); // /3 sbb
+    RE_CHECK_EQ_U((uint64_t)lower1("4883e028", a), RE_OP_CMP); // /4 and
+    RE_CHECK_EQ_U((uint64_t)lower1("4883e828", a), RE_OP_CMP); // /5 sub
+    RE_CHECK_EQ_U((uint64_t)lower1("4883f028", a), RE_OP_CMP); // /6 xor
+    RE_CHECK_EQ_U((uint64_t)lower1("4883f828", a), RE_OP_CMP); // /7 cmp
+    RE_CHECK_EQ_U(lowern("4883c028", a), 4); // the immediate, the add, the zero, the writer
+    RE_CHECK_EQ_U(lowern("4883f828", a), 2); // cmp writes no result, so no writer follows
+    // A compare against a register, and the zero test, are both comparisons:
+    // one op each now, since the recorded pair carries the real operands.
     RE_CHECK_EQ_U((uint64_t)lower1("4839d8", a), RE_OP_CMP); // cmp rax,rbx
     RE_CHECK_EQ_U((uint64_t)lower1("4885c0", a), RE_OP_CMP); // test rax,rax
+    RE_CHECK_EQ_U(lowern("4885c0", a), 1);
     RE_CHECK_EQ_U(lowern("4839d8", a), 1);
-    RE_CHECK_EQ_U(lowern("4885c0", a), 2);
 }
 
 static void test_lowering_forms(re_arena_t *a) {
     // A memory destination is a read modify write: the address, the load, the
-    // operation, the address again, and the store. One op here would be a lost value.
-    RE_CHECK_EQ_U((uint64_t)lower1("4801442410", a), RE_OP_STORE);
-    RE_CHECK_EQ_U(lowern("4801442410", a), 5);
-    // The byte form of the same group. Six ops rather than five because the immediate
-    // is emitted first, and is itself a constant.
-    RE_CHECK_EQ_U((uint64_t)lower1("80241820", a), RE_OP_STORE);
-    RE_CHECK_EQ_U(lowern("80241820", a), 6);
+    // operation, the address again, the store, then the zero and the writer the
+    // next branch reads. One op here would be a lost value.
+    RE_CHECK_EQ_U((uint64_t)lower1("4801442410", a), RE_OP_CMP);
+    RE_CHECK_EQ_U(lowern("4801442410", a), 7);
+    // The byte form of the same group, with the immediate emitted first.
+    RE_CHECK_EQ_U((uint64_t)lower1("80241820", a), RE_OP_CMP);
+    RE_CHECK_EQ_U(lowern("80241820", a), 8);
     // A zero immediate is still an immediate. Reading it as absent would substitute a
     // register for the number the author wrote, which is a plausible wrong answer
     // rather than an obvious one, so both forms are pinned.
-    RE_CHECK_EQ_U((uint64_t)lower1("4883601800", a), RE_OP_STORE); // and [rax+0x18],0
-    RE_CHECK_EQ_U(lowern("4883601800", a), 6);
+    RE_CHECK_EQ_U((uint64_t)lower1("4883601800", a), RE_OP_CMP); // and [rax+0x18],0
+    RE_CHECK_EQ_U(lowern("4883601800", a), 8);
     RE_CHECK_EQ_U((uint64_t)lower1("48c7c000000000", a), RE_OP_CONST); // mov rax,0
-    RE_CHECK_EQ_U((uint64_t)lower1("4883c000", a), RE_OP_INTADD);      // add rax,0
+    RE_CHECK_EQ_U((uint64_t)lower1("4883c000", a), RE_OP_CMP);         // add rax,0
     // The direction of a two operand form comes from bit 1, not bit 0: 0x00 and 0x01
     // are both r/m with a register, 0x02 and 0x03 are a register with r/m.
-    RE_CHECK_EQ_U((uint64_t)lower1("4801d8", a), RE_OP_INTADD); // add rax,rbx
-    RE_CHECK_EQ_U((uint64_t)lower1("4803d8", a), RE_OP_INTADD); // add rbx,rax
+    RE_CHECK_EQ_U((uint64_t)lower1("4801d8", a), RE_OP_CMP); // add rax,rbx
+    RE_CHECK_EQ_U((uint64_t)lower1("4803d8", a), RE_OP_CMP); // add rbx,rax
     // Each run of eight opcodes is one operation, so the whole block is pinned. This
     // is where a table written as a switch went wrong once: and, sub and cmp were
     // attached to the wrong runs, which produced a subtraction for an "and".
-    RE_CHECK_EQ_U((uint64_t)lower1("4821d8", a), RE_OP_INTAND); // and rax,rbx
-    RE_CHECK_EQ_U((uint64_t)lower1("4829d8", a), RE_OP_INTSUB); // sub rax,rbx
-    RE_CHECK_EQ_U((uint64_t)lower1("4831d8", a), RE_OP_INTXOR); // xor rax,rbx
-    RE_CHECK_EQ_U((uint64_t)lower1("4809d8", a), RE_OP_INTOR);  // or  rax,rbx
-    RE_CHECK_EQ_U((uint64_t)lower1("4811d8", a), (uint64_t)-1); // adc: not modelled
-    RE_CHECK_EQ_U((uint64_t)lower1("4819d8", a), (uint64_t)-1); // sbb: not modelled
+    RE_CHECK_EQ_U((uint64_t)lower1("4821d8", a), RE_OP_CMP); // and rax,rbx
+    RE_CHECK_EQ_U((uint64_t)lower1("4829d8", a), RE_OP_CMP); // sub rax,rbx
+    RE_CHECK_EQ_U((uint64_t)lower1("4831d8", a), RE_OP_CMP); // xor rax,rbx
+    RE_CHECK_EQ_U((uint64_t)lower1("4809d8", a), RE_OP_CMP); // or  rax,rbx
+    // The carry forms read the carry explicitly now, and end on the writer.
+    RE_CHECK_EQ_U((uint64_t)lower1("4811d8", a), RE_OP_CMP); // adc rax,rbx
+    RE_CHECK_EQ_U((uint64_t)lower1("4819d8", a), RE_OP_CMP); // sbb rax,rbx
+    RE_CHECK_EQ_U(lowern("4811d8", a), 3);                   // the add, the zero, the writer
     // The accumulator forms have no ModRM byte, so their operand is rax by definition.
     RE_CHECK_EQ_U((uint64_t)lower1("05"
                                    "11223344",
                                    a),
-                  RE_OP_INTADD);
+                  RE_OP_CMP);
     RE_CHECK_EQ_U(lowern("05"
                          "11223344",
                          a),
-                  2); // the immediate, then the add
-    // Not modelled, and pinned so that adding support is a deliberate change.
-    RE_CHECK_EQ_U((uint64_t)lower1("6690", a), (uint64_t)-1);     // size prefix on a nop
-    RE_CHECK_EQ_U((uint64_t)lower1("f30f1efa", a), (uint64_t)-1); // endbr64
-    RE_CHECK_EQ_U((uint64_t)lower1("55", a), (uint64_t)-1);       // push rbp
+                  4); // the immediate, the add, the zero, the writer
+    // Deliberately silent, and pinned so that silencing more is a choice: a
+    // size prefix on a nop is still a nop, and endbr is a no-op the ABI asks for.
+    RE_CHECK_EQ_U((uint64_t)lower1("6690", a), RE_OP_NOP);     // size prefix on a nop
+    RE_CHECK_EQ_U((uint64_t)lower1("f30f1efa", a), RE_OP_NOP); // endbr64
+    // A push lowers to the subtract and the store the hardware performs.
+    RE_CHECK_EQ_U((uint64_t)lower1("55", a), RE_OP_STORE); // push rbp
+    RE_CHECK_EQ_U(lowern("55", a), 3);
     RE_CHECK_EQ_U((uint64_t)lower1("c3", a), RE_OP_RETURN);
     RE_CHECK_EQ_U((uint64_t)lower1("e800000000", a), RE_OP_CALL);
     RE_CHECK_EQ_U((uint64_t)lower1("eb00", a), RE_OP_BRANCH);
@@ -470,7 +372,7 @@ int main(void) {
         return 1;
     }
     test_registry();
-    test_vectors();
+    re_disasm_vec_run(g_x64);
     test_targets();
     test_truncated();
     test_indirect();

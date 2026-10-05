@@ -258,5 +258,5 @@ uint16_t re_layout_compose(re_screen_t *s, re_layout_t *L) {
     draw_pages(s, L, split, &f);
     draw_body(s, L, split, &f);
     draw_bottom(s, &f);
-    return (uint16_t)(s->rows - 3u);
+    return (uint16_t)re_layout_body_rows(s->rows);
 }

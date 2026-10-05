@@ -13,6 +13,7 @@ extern "C" {
 #include <stdint.h>
 
 #include "features/code/re_code.h"
+#include "features/lib/re_flirt.h"
 #include "features/meta/re_disasm.h"
 #include "features/pe/re_pe.h"
 #include "utils/json/re_json.h"
@@ -30,6 +31,14 @@ bool re_prepare(re_ctx_t *ctx, const char *path, re_file_t *f, re_pe_t *pe, re_c
 // the arch are what let a caller parse one response without knowing which command
 // produced it.
 void re_envelope(re_jw_t *w, const char *tool, re_span_t img, const re_pe_t *pe);
+
+// Name every function the image does not name itself, from the image's own function table
+// when it has one and then from the built in signatures plus one file when a path is
+// given. Every surface that shows a function name goes through here, so the report, the
+// graph and the view cannot disagree about what a function is called. Returns how many it
+// named.
+size_t re_prep_names(re_ctx_t *ctx, const char *sigfile, re_code_t *code, re_fscan_t *scan,
+                     re_flirt_load_stat_t *stat);
 
 // Accepts a decimal or 0x hex address, as an RVA or already absolute. A value inside
 // the image is taken as a virtual address and anything else as an RVA, because

@@ -1,10 +1,9 @@
 // re_demangle.c - Itanium ABI demangling, the common cases done honestly.
 // Module: feature (C11).
-// Owns: the Itanium parser, the substitution pool, and the dispatch entry point.
-// Depends: re_demangle.h and re_demangle_rtti. Output bounded, no globals beyond
-//           const tables.
+// Owns: the Itanium parser and the substitution pool.
+// Depends: re_demangle.h. Output bounded, no globals beyond const tables. The
+//           classifier and the dispatch live in re_demangle_kind.c.
 #include "features/lib/re_demangle.h"
-#include "features/lib/re_demangle_rtti.h"
 
 #include <stddef.h>
 #include <stdio.h>
@@ -382,6 +381,16 @@ static void it_params(it_t *s, const char **in) {
     s->sink = &s->out;
 }
 
+// The rendered name, or false when nothing was produced. A buffer that ended up empty
+// is a failure rather than a name that happens to be blank.
+static bool it_finish(it_t *s, re_str_t *out) {
+    char *text = re_strbuf_detach(&s->out);
+    if (!text || re_str(text).n == 0)
+        return false;
+    *out = re_str(text);
+    return true;
+}
+
 bool re_demangle_itanium(re_arena_t *a, const char *sym, size_t n, re_str_t *out) {
     it_t s;
     s.p = sym;
@@ -405,9 +414,24 @@ bool re_demangle_itanium(re_arena_t *a, const char *sym, size_t n, re_str_t *out
         p = s.p + 3;
     else if (s.end - s.p >= 2 && s.p[0] == '_' && s.p[1] == 'Z')
         p = s.p + 2;
+    bool nested = p < s.end && *p == 'N';
     it_name(&s, &p);
-    if (!s.ok || p >= s.end)
+    if (!s.ok)
         return false;
+    // A nested name is closed by 'E'. A symbol without it is truncated, and what looks
+    // like a name is a fragment of a longer one: the parser reaches the end of the
+    // symbol without ever being told the name was finished, so this is refused rather
+    // than reported as a name that carries no parameters.
+    if (nested && (p <= s.p || p[-1] != 'E'))
+        return false;
+    // A name that consumed the whole symbol carries no parameter list. That is a data
+    // symbol, or a Rust legacy function, whose mangling ends with its disambiguating
+    // hash and never states parameters at all. This used to be refused, which made
+    // every such symbol report failure: the most common nested shape in existence was
+    // undemanglable because it had nothing after the name. Rendering "()" here would
+    // claim a function the encoding does not state, so the name is rendered alone.
+    if (p == s.end)
+        return it_finish(&s, out);
     // The underscore separating a name from its parameters is present only when
     // the encoding actually carries one, so it must be optional.
     if (*p == '_')
@@ -426,33 +450,5 @@ bool re_demangle_itanium(re_arena_t *a, const char *sym, size_t n, re_str_t *out
         p++;
     if (p != s.end)
         return false;
-    char *text = re_strbuf_detach(&s.out);
-    if (!text || re_str(text).n == 0)
-        return false;
-    *out = re_str(text);
-    return true;
-}
-
-re_mangle_t re_mangle_kind(const char *sym, size_t n) {
-    if (n >= 3 && sym[0] == '_' && sym[1] == 'Z')
-        return RE_MANGLE_ITANIUM;
-    if (n >= 3 && sym[0] == '_' && (sym[1] == 'Z' || sym[1] == 'G' || sym[1] == 'T') &&
-        sym[2] != '\0')
-        return RE_MANGLE_ITANIUM;
-    if (n >= 2 && sym[0] == '?')
-        return RE_MANGLE_MSVC;
-    if (n >= 3 && sym[0] == '@' && sym[1] == '?')
-        return RE_MANGLE_MSVC;
-    return RE_MANGLE_UNKNOWN;
-}
-
-bool re_demangle(re_arena_t *a, const char *sym, size_t n, re_str_t *out) {
-    switch (re_mangle_kind(sym, n)) {
-        case RE_MANGLE_ITANIUM:
-            return re_demangle_itanium(a, sym, n, out);
-        case RE_MANGLE_MSVC:
-            return re_demangle_msvc(a, sym, n, out);
-        default:
-            return re_demangle_rtti(a, sym, n, out);
-    }
+    return it_finish(&s, out);
 }

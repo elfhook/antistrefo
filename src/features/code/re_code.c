@@ -72,6 +72,27 @@ bool re_code_in_code(const re_code_t *c, uint64_t va) {
     return find(c, va, &base) != NULL;
 }
 
+void re_code_window(const re_code_t *c, uint64_t *lo, uint64_t *hi) {
+    uint64_t min = 0;
+    uint64_t max = 0;
+    bool any = false;
+    for (uint16_t i = 0; i < c->pe->n_sec; i++) {
+        const re_pe_section_t *s = &c->pe->sec[i];
+        uint64_t bytes = s->rsize < s->vsize ? s->rsize : s->vsize;
+        uint64_t start;
+        if (bytes == 0 || (s->chars & (RE_SEC_EXEC | RE_SEC_CODE)) == 0)
+            continue;
+        start = c->base + s->vaddr;
+        if (!any || start < min)
+            min = start;
+        if (!any || start + bytes > max)
+            max = start + bytes;
+        any = true;
+    }
+    *lo = any ? min : 0;
+    *hi = any ? max : 0;
+}
+
 bool re_code_at(const re_code_t *c, uint64_t va, re_span_t *bytes) {
     uint64_t base = 0;
     const re_pe_section_t *s = find(c, va, &base);

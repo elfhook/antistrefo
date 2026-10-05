@@ -93,6 +93,13 @@ typedef struct {
     uint8_t rows_drawn;
 } re_layout_t;
 
+// The body's height on a frame of this many rows: the menu row, the page row and the
+// bottom edge are not the body. The composer and any caller that sizes a pane use the
+// same number, or a pane is sized to rows the reader cannot see.
+static inline size_t re_layout_body_rows(uint16_t rows) {
+    return rows > 3u ? (size_t)rows - 3u : 1u;
+}
+
 // Draw the arrangement onto a screen. L is not const because the composer fills in
 // button_zone, and only it knows the id: zones are handed out in drawing order. Clips to the
 // screen, refuses rather than truncates when the screen is too short to hold it, and returns how

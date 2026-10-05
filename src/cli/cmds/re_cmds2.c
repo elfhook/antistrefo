@@ -209,10 +209,7 @@ int re_cmd_demangle(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     re_jw_kcstr(&w, "schema", SCHEMA2);
     re_jw_kcstr(&w, "tool", "demangle");
     re_jw_kstr(&w, "symbol", sym);
-    re_jw_kcstr(&w, "mangling",
-                re_mangle_kind(sym.p, sym.n) == RE_MANGLE_ITANIUM ? "itanium"
-                : re_mangle_kind(sym.p, sym.n) == RE_MANGLE_MSVC  ? "msvc"
-                                                                  : "none");
+    re_jw_kcstr(&w, "mangling", re_mangle_name(re_mangle_kind(sym.p, sym.n)));
     re_jw_kbool(&w, "ok", ok);
     if (ok)
         re_jw_kstr(&w, "demangled", out);

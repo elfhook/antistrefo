@@ -23,6 +23,7 @@
 #include "utils/mem/re_vec.h"
 
 #include "re_pe_fixture.h"
+#include "re_walk_fixture.h"
 
 int re_test_count = 0;
 int re_test_fail = 0;
@@ -199,10 +200,10 @@ static void check_analysis(void) {
 }
 
 // The pass table must have one record per pass, whatever happened. A pass that bailed
-// still has a slot saying so, because a report with eight rows and six real results
+// still has a slot saying so, because a report with nine rows and seven real results
 // reads exactly like one where two passes found nothing.
 static void check_pass_records(void) {
-    RE_CHECK_EQ_U(RE_PASS_COUNT, 8);
+    RE_CHECK_EQ_U(RE_PASS_COUNT, 11);
     RE_CHECK(re_str_eq_cstr(re_str(re_analysis_pass_name(RE_PASS_FUNCS)), "functions"));
     // The wording for a skip has to say something actionable, not just "skipped".
     RE_CHECK(re_str(re_analysis_skip_name(RE_PASS_SKIP_NO_DECODER)).n > 8);
@@ -237,20 +238,31 @@ static void check_regions(re_code_t *code, const re_fscan_t *scan, const re_pe_t
     RE_CHECK(found >= 1);
 }
 
-// With --emit <path>, write the fixture to disk and stop. The command layer lives in
-// the executable rather than in a library, so the only way to test a command is to run
-// it against a real file, and this is how that file appears. Without the flag this is
-// the normal suite.
+// With --emit <path>, write the fixture to disk and stop; --emit-walk writes the
+// recovery fixture instead, which is the one whose bodies need junk resync, an
+// overlap, the instruction ceiling and a declared non-returning tail. The command
+// layer lives in the executable rather than in a library, so the only way to test a
+// command is to run it against a real file, and this is how that file appears.
+// Without a flag this is the normal suite.
 static int emit_fixture(int argc, char **argv) {
-    uint8_t img[IMG_BYTES];
+    static uint8_t img[IMG_BYTES];
+    static uint8_t walk[WALK_IMG_BYTES];
+    const uint8_t *bytes = img;
+    size_t n = sizeof(img);
     FILE *fh;
     if (argc < 3)
         return 2;
-    build_pe(img);
+    if (strcmp(argv[1], "--emit-walk") == 0) {
+        walk_build_pe(walk);
+        bytes = walk;
+        n = sizeof(walk);
+    } else {
+        build_pe(img);
+    }
     fh = fopen(argv[2], "wb");
     if (!fh)
         return 3;
-    fwrite(img, 1, sizeof(img), fh);
+    fwrite(bytes, 1, n, fh);
     fclose(fh);
     return 0;
 }

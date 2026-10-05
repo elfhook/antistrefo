@@ -30,8 +30,19 @@ extern "C" {
 #define RE_FUNC_JTABLE 0x0100u   // ends in a jump table dispatch
 #define RE_FUNC_RET 0x0200u      // a return was seen on at least one path
 #define RE_FUNC_UNWIND 0x0400u   // the PE exception table places its bounds
+#define RE_FUNC_JUNK 0x0800u     // the walk skipped bytes that do not decode
+#define RE_FUNC_TRUNC 0x1000u    // the walk stopped at the instruction ceiling
 
 #define RE_FUNC_MAX_INSNS 4096u
+
+// The evidence tag a seed writes into re_func_t::module. A name inferred from a
+// structure in the image is weaker than a name the image states about itself, and
+// this is how a later pass tells the two apart before it decides to keep one.
+#define RE_SEED_MODULE_DRIVER "driver"
+#define RE_SEED_MODULE_IRP "irp"
+#define RE_SEED_MODULE_IMPORT "import"
+#define RE_SEED_MODULE_TLS "tls"
+#define RE_SEED_MODULE_POINTER "pointer"
 
 typedef enum {
     RE_EDGE_NONE = 0,
@@ -57,9 +68,12 @@ typedef struct {
     uint32_t n_insns;
     uint32_t n_calls;
     uint32_t n_jumps;
+    uint32_t junk;       // bytes inside the body that did not decode, skipped
+    uint32_t open_edges; // transfers whose destination could not be resolved
     uint32_t flags;
     uint32_t out_edges; // transfers leaving this function, counted once after the scan
     re_str_t name;      // from exports or FLIRT, empty otherwise
+    re_str_t module;    // the library a signature named, empty when unknown
 } re_func_t;
 
 typedef struct {

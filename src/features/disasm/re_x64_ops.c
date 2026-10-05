@@ -23,20 +23,29 @@ static const char *const kRegQ[16] = {"rax", "rcx", "rdx", "rbx", "rsp", "rbp", 
 static const char *const kRegX[16] = {"xmm0",  "xmm1",  "xmm2",  "xmm3", "xmm4",  "xmm5",
                                       "xmm6",  "xmm7",  "xmm8",  "xmm9", "xmm10", "xmm11",
                                       "xmm12", "xmm13", "xmm14", "xmm15"};
+static const char *const kRegY[16] = {"ymm0",  "ymm1",  "ymm2",  "ymm3", "ymm4",  "ymm5",
+                                      "ymm6",  "ymm7",  "ymm8",  "ymm9", "ymm10", "ymm11",
+                                      "ymm12", "ymm13", "ymm14", "ymm15"};
+static const char *const kRegM[8] = {"mm0", "mm1", "mm2", "mm3", "mm4", "mm5", "mm6", "mm7"};
 
+// The maps 2 and 3 have no names in the opcode map: every instruction in them takes
+// its name from the prefix and the opcode together, which is the table in
+// re_x64_simd.c. Returning NULL here is what keeps a placeholder out of the text.
 const char *x64_mnem(uint16_t id) {
     uint8_t map = X64_ID_MAP(id);
     uint8_t op = X64_ID_OP(id);
-    if (map == 2 || map == 3)
-        return map == 2 ? "esc38" : "esc3a";
     if (map > 1)
         return NULL;
     return map ? kOp0F[op].m : kOp1[op].m;
 }
 
 const char *x64_reg_name(unsigned reg, uint8_t opsize) {
-    if (reg >= 128)
-        return kRegX[reg - 128];
+    if (reg >= RE_X64_MMX_BASE)
+        return reg < RE_X64_MMX_BASE + 8u ? kRegM[reg - RE_X64_MMX_BASE] : NULL;
+    if (reg >= RE_X64_YMM_BASE)
+        return reg < RE_X64_MMX_BASE ? kRegY[reg - RE_X64_YMM_BASE] : NULL;
+    if (reg >= RE_X64_XMM_BASE)
+        return reg < RE_X64_YMM_BASE ? kRegX[reg - RE_X64_XMM_BASE] : NULL;
     if (reg >= 64)
         return NULL;
     if (opsize == 1)
@@ -137,6 +146,54 @@ static void classify(const x64_insn_t *in, re_insn_t *o) {
         o->has_target = false;
 }
 
+// Whether the operands of an instruction are vector registers rather than general
+// purpose ones. The SIMD blocks of the 0F map are contiguous runs, which is why this
+// can be a range test rather than a table: everything from 0F 10 to 0F 17, 28 to 2F,
+// 50 to FE operates on vector registers, and the rest of the map - cpuid, rdtsc,
+// cmov, the bit tests, the fences, movnti - does not. A VEX or EVEX encoding reaches
+// the same map, so the test is the same one: the mask register moves an AVX-512
+// encoding adds sit above 0F 90 and are not vector operations at all.
+// The 0F38 and 0F3A maps hold a handful of instructions whose operands are general
+// purpose registers even though everything around them is a vector one: the byte
+// swapping moves, the carry chains, stores and shifts that share those opcode bytes
+// with them, and the rotate the 0F3A map reaches under its F2 prefix.
+static bool is_gp_map_op(const x64_insn_t *in) {
+    if (in->map == 2u)
+        return in->opcode == 0xF0u || in->opcode == 0xF1u || in->opcode == 0xF5u ||
+               in->opcode == 0xF6u || in->opcode == 0xF7u;
+    return in->map == 3u && in->opcode == 0xF0u && in->pfx == 3u;
+}
+
+static bool is_simd(const x64_insn_t *in) {
+    if (in->map >= 2)
+        return !is_gp_map_op(in);
+    if (in->map != 1)
+        return false;
+    // movnti sits in the middle of the packed integer block and moves a general
+    // purpose register, so the vector names are wrong for both of its operands.
+    if (in->opcode == 0xC3u)
+        return false;
+    return in->opcode == 0x0Fu || // 3DNow, which is mmx all the way through
+           (in->opcode >= 0x10u && in->opcode <= 0x17u) ||
+           (in->opcode >= 0x28u && in->opcode <= 0x2Fu) ||
+           (in->opcode >= 0x50u && in->opcode <= 0x7Fu) ||
+           (in->opcode >= 0xC2u && in->opcode <= 0xC6u) ||
+           (in->opcode >= 0xD0u && in->opcode <= 0xFEu);
+}
+
+// The mmx forms. Most of the packed integer block is a 64-bit mmx operation when no
+// prefix is present and a 128-bit xmm one under 0x66, so the prefix decides the
+// register file as well as the name. A VEX encoding has no mmx form at all, and the
+// conversions between the two register files are left as xmm because naming one
+// half of them right and the other half wrong reads worse than naming both alike.
+static bool is_mmx(const x64_insn_t *in) {
+    unsigned op = in->opcode;
+    if (in->vex || in->map != 1 || in->pfx != 0)
+        return false;
+    return op == 0x0Fu || (op >= 0x60u && op <= 0x6Fu) || (op >= 0x70u && op <= 0x77u) ||
+           (op >= 0x7Eu && op <= 0x7Fu) || (op >= 0xD0u && op <= 0xFEu);
+}
+
 static bool x64_vt_decode(void *ctx, uint64_t addr, re_span_t code, re_insn_t *out) {
     x64_insn_t in;
     (void)ctx;
@@ -156,14 +213,38 @@ static bool x64_vt_decode(void *ctx, uint64_t addr, re_span_t code, re_insn_t *o
     out->modrm = in.modrm;
     out->opsize = in.opsize;
     out->rex = in.rex;
+    out->addrsize = in.addrsize;
+    out->pfx = in.pfx;
+    out->vex = in.vex;
+    out->vex_l = in.vex_l;
+    out->vex_w = in.vex_w;
     out->imm = in.imm;
     out->target = in.target;
     out->mem = in.mem;
     out->has_mem = in.rip_rel;
     out->is_mem = in.is_mem;
     out->mod = in.mod;
-    out->reg = in.reg;
-    out->rm = in.rm;
+    // A vector operand is numbered above the general purpose ones, so a renderer and
+    // the emitter can tell them apart from the number alone. The length bit of the
+    // encoding decides whether the name is xmm or ymm, and the mmx forms are always
+    // 64 bit, which is why the register file is chosen here and not by the renderer.
+    // An operand that is memory is left alone: its fields are the address, not a
+    // register.
+    if (is_simd(&in)) {
+        bool mm = is_mmx(&in);
+        unsigned vb = mm ? RE_X64_MMX_BASE : (in.vex_l ? RE_X64_YMM_BASE : RE_X64_XMM_BASE);
+        out->reg = (uint8_t)(vb + (mm ? (in.reg & 7u) : in.reg));
+        if (!in.is_mem)
+            out->rm = (uint8_t)(vb + (mm ? (in.rm & 7u) : in.rm));
+        // For a SIMD instruction the operand size is the width of the register, which
+        // is what the text renderer needs to say how wide a memory operand is. It is
+        // not read as a general purpose size anywhere: these instructions do not move
+        // a general purpose register.
+        out->opsize = mm ? 8u : (in.vex_l ? 32u : 16u);
+    } else {
+        out->reg = in.reg;
+        out->rm = in.rm;
+    }
     out->base = in.base;
     out->index = in.index;
     out->scale = in.scale;
@@ -205,7 +286,11 @@ static const char *x64_vt_reg_name(void *ctx, unsigned reg) {
 
 static unsigned x64_vt_reg_size(void *ctx, unsigned reg) {
     (void)ctx;
-    if (reg >= 128)
+    if (reg >= RE_X64_MMX_BASE)
+        return 8;
+    if (reg >= RE_X64_YMM_BASE)
+        return 32;
+    if (reg >= RE_X64_XMM_BASE)
         return 16;
     return (reg / 16u) == 4u ? 2u : (reg / 16u) == 3u ? 4u : 8u;
 }

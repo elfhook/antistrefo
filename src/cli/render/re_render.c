@@ -281,18 +281,20 @@ int re_render_funcs(re_ctx_t *ctx, const char *path) {
     static const size_t kWidths[10] = {15, 6, 6, 5, 4, 4, 6, 9, 6, 0};
     const char *tabs[1] = {"functions"};
     const char *cols[10] = {"va",  "size",  "insns",   "edges", "args",
-                            "loc", "frame", "argregs", "conv",  ""};
+                            "loc", "frame", "argregs", "conv",  "name"};
     const char *cells[10];
     size_t shown = 0;
+    size_t named;
     if (!re_prepare(ctx, path, &f, &pe, &code))
         return re_err_exit_code(ctx->err->code);
     re_func_scan(&code, ctx->arena, &scan);
+    named = re_prep_names(ctx, NULL, &code, &scan, NULL);
     re_report_open(&r, ctx->arena, ctx, tabs, 1);
     re_strbuf_init(&subj, ctx->arena);
     re_strbuf_init(&sum, ctx->arena);
     re_strbuf_puts(&subj, "funcs ");
     re_strbuf_puts(&subj, re_path_basename_ptr(path));
-    re_strbuf_appendf(&sum, "%zu functions  %zu edges", RE_VEC_LEN(&scan.funcs),
+    re_strbuf_appendf(&sum, "%zu functions  %zu named  %zu edges", RE_VEC_LEN(&scan.funcs), named,
                       RE_VEC_LEN(&scan.edges));
     re_report_head(&r, subj.p, sum.p);
     re_table_begin(&tt, &r, "Recovered functions", kWidths, 10);
@@ -310,7 +312,10 @@ int re_render_funcs(re_ctx_t *ctx, const char *path) {
         cells[6] = re_report_tmp(&r, "%u", st.frame_size);
         cells[7] = arg_names(&r, &st);
         cells[8] = re_cc_name(st.cc);
-        cells[9] = "";
+        // A function nothing named is labelled by its address rather than left blank,
+        // so a row is never indistinguishable from a row that failed to render.
+        cells[9] =
+            fn->name.n ? fn->name.p : re_report_tmp(&r, "sub_%llx", (unsigned long long)fn->va);
         re_table_row(&tt, cells);
     }
     re_table_end(&tt);

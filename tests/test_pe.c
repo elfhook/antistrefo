@@ -156,27 +156,38 @@ static void check_no_split_inside_unwind(re_code_t *code, const re_fscan_t *scan
 // prologue with an unknown stack adjustment and a pattern that never matches.
 static void check_slack_matching(re_code_t *code) {
     re_sig_t s;
+    memset(&s, 0, sizeof(s));
     s.module = re_str("");
+    s.name = re_str("exact");
     // The first three bytes of .text, which are 48 83 f8. The fourth is 01 here.
     s.pattern = re_str("4883f8");
-    s.name = re_str("exact");
-    s.slack = 0;
+    RE_CHECK(re_sig_compile(&s));
     RE_CHECK(re_sig_match(code, code->base + TEXT_RVA, &s));
+    // A signature that was never compiled claims nothing, so it cannot match. This is
+    // the state a hand built signature is in until it is compiled, and treating it as
+    // an empty pattern would make it match everything.
+    s.n = 0;
+    RE_CHECK(!re_sig_match(code, code->base + TEXT_RVA, &s));
     // Same pattern with the last byte wrong and one byte of slack: the wrong byte is
     // exactly the one slack excuses, so this must match.
     s.pattern = re_str("4883f8ff");
     s.slack = 1;
+    RE_CHECK(re_sig_compile(&s));
     RE_CHECK(re_sig_match(code, code->base + TEXT_RVA, &s));
     // And without the slack the same pattern must not match, or slack means nothing.
     s.slack = 0;
+    RE_CHECK(re_sig_compile(&s));
     RE_CHECK(!re_sig_match(code, code->base + TEXT_RVA, &s));
     // A wrong byte that slack does not reach is still a miss.
     s.pattern = re_str("fffff8");
     s.slack = 1;
+    RE_CHECK(re_sig_compile(&s));
     RE_CHECK(!re_sig_match(code, code->base + TEXT_RVA, &s));
-    // Slack covering the whole pattern claims nothing at all, so it names nothing.
+    // Slack covering the whole pattern claims nothing at all, so the pattern is
+    // refused at compile time rather than loaded as one that can never fire.
     s.pattern = re_str("4883f8");
     s.slack = 3;
+    RE_CHECK(!re_sig_compile(&s));
     RE_CHECK(!re_sig_match(code, code->base + TEXT_RVA, &s));
 }
 
@@ -267,6 +278,42 @@ static void check_func_pick(void) {
     RE_CHECK_EQ_U(re_gui_funcs_index(7, &l, 2), 7);
     RE_CHECK_EQ_U(re_gui_funcs_row(7, &l), 2);
     RE_CHECK_EQ_U(re_gui_funcs_index(9, &l, 4), 9);
+    // The window stops at the end of the list rather than scrolling past it, so the
+    // last function is on the last row and no row repeats the one above it.
+    RE_CHECK_EQ_U(re_gui_funcs_row(9, &l), 4);
+    RE_CHECK_EQ_U(re_gui_funcs_index(9, &l, 0), 5);
+    // A pane the whole list fits in never scrolls: every row is its own function,
+    // which is what showing however much fits means.
+    l.vis = 10;
+    RE_CHECK_EQ_U(re_gui_funcs_row(7, &l), 7);
+    RE_CHECK_EQ_U(re_gui_funcs_index(7, &l, 7), 7);
+    RE_CHECK_EQ_U(re_gui_funcs_index(9, &l, 0), 0);
+    l.name[7] = "seven";
+    const char *rows[10];
+    re_gui_funcs_window(7, &l, rows, 10);
+    RE_CHECK(rows[7] && re_str_eq_cstr(re_str(rows[7]), "seven"));
+    // fit sizes the window to the pane, and never past the list it has or the bound
+    // the caller's array was built for.
+    re_gui_funcs_fit(&l, 4);
+    RE_CHECK_EQ_U(l.vis, 4);
+    re_gui_funcs_fit(&l, 1000);
+    RE_CHECK_EQ_U(l.vis, 10);
+    // A pane of 27 rows on a 40 function list, which is what a 30 row frame gives the
+    // view: the window is the pane, in order from the top, and at the end it stops at
+    // the last 27 functions rather than scrolling past them.
+    l.n = 40;
+    re_gui_funcs_fit(&l, 27);
+    RE_CHECK_EQ_U(l.vis, 27);
+    RE_CHECK_EQ_U(re_gui_funcs_index(0, &l, 26), 26);
+    RE_CHECK_EQ_U(re_gui_funcs_index(30, &l, 0), 13);
+    RE_CHECK_EQ_U(re_gui_funcs_row(30, &l), 17);
+    RE_CHECK_EQ_U(re_gui_funcs_row(39, &l), 26);
+    // An empty list is one row, and it says so rather than leaving the row unset.
+    re_gui_funcs_t e;
+    memset(&e, 0, sizeof(e));
+    const char *empty[2] = {NULL, NULL};
+    re_gui_funcs_window(0, &e, empty, 2);
+    RE_CHECK(empty[0] && re_str_eq_cstr(re_str(empty[0]), "(no functions)"));
 }
 
 int main(void) {

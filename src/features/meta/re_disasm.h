@@ -41,6 +41,20 @@ typedef struct {
     uint8_t modrm;
     uint8_t opsize; // operand size in bytes: 1, 2, 4 or 8
     uint8_t rex;    // extension prefix, 0 when absent
+    // The SIMD prefix the encoding carried, because the same opcode is a different
+    // instruction under each: 0 none, 1 is 0x66, 2 is 0xF3, 3 is 0xF2. A VEX or EVEX
+    // encoding states its prefix rather than carrying one, and it lands here too.
+    uint8_t pfx;
+    // The width of an address register: eight bytes, or four under the 0x67 override.
+    // An address is not an operand, so this is not the operand size, and printing an
+    // address register at the operand size turns [rax] into [eax] on every SIMD
+    // instruction in the file.
+    uint8_t addrsize;
+    bool vex;   // the encoding used VEX or EVEX, so the mnemonic carries its own v
+    bool vex_l; // the VEX length bit: false names xmm registers, true names ymm
+    // The VEX W bit, which widens the operands the way REX.W does but reaches the
+    // instructions REX cannot: 0F 6E without it is movd and with it is movq.
+    bool vex_w;
     // The memory operand, decomposed. is_mem is false for a register operand, and
     // base and index are RE_REG_NONE when the addressing mode leaves them out.
     bool is_mem;

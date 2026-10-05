@@ -35,6 +35,12 @@ bool re_code_init(re_code_t *c, re_span_t img, const re_pe_t *pe, const re_disas
 // True when the address falls inside an executable, mapped section.
 bool re_code_in_code(const re_code_t *c, uint64_t va);
 
+// The image's code window in absolute addresses: the lowest and the highest address its
+// executable sections cover. A table that states its entries relative to the start of the
+// code needs this window to turn them into addresses, and the test for what counts as
+// code is the one the walk uses, so the build has one answer rather than two.
+void re_code_window(const re_code_t *c, uint64_t *lo, uint64_t *hi);
+
 // The bytes at a virtual address, for handing to the decoder. False when the
 // address is not executable or only part of the span is mapped.
 bool re_code_at(const re_code_t *c, uint64_t va, re_span_t *bytes);

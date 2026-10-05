@@ -118,6 +118,27 @@ static void indicators(re_jw_t *w, const re_analysis_t *an) {
     re_jw_obj_end(w);
 }
 
+// The quality scoreboard: the six axes a decompiler depends on, each with its own
+// denominator so a reader can see how much evidence stands behind the composite.
+static void quality(re_jw_t *w, const re_analysis_t *an) {
+    const re_score_t *s = &an->score;
+    re_jw_key(w, "quality");
+    re_jw_obj(w);
+    re_jw_kf64(w, "score", s->score);
+    re_jw_ku64(w, "funcs", s->n_funcs);
+    re_jw_ku64(w, "pdata", s->n_pdata);
+    re_jw_ku64(w, "pdata_hit", s->n_pdata_hit);
+    re_jw_ku64(w, "edges", s->n_edges);
+    re_jw_ku64(w, "edges_resolved", s->n_edges_ok);
+    re_jw_ku64(w, "calls", s->n_calls);
+    re_jw_ku64(w, "calls_named", s->n_calls_named);
+    re_jw_ku64(w, "insns_sampled", s->n_insns);
+    re_jw_ku64(w, "insns_lowered", s->n_lowered);
+    re_jw_ku64(w, "indirect", s->n_indirect);
+    re_jw_ku64(w, "indirect_resolved", s->n_indirect_ok);
+    re_jw_obj_end(w);
+}
+
 int re_cmd_analyze(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     re_analysis_t local;
     re_analysis_t *an = NULL;
@@ -154,6 +175,7 @@ int re_cmd_analyze(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     re_jw_ku64(&w, "exports", RE_VEC_LEN(&an->pe.exports));
     re_jw_ku64(&w, "signatures", RE_VEC_LEN(&an->sigs));
     indicators(&w, an);
+    quality(&w, an);
     pass_rows(&w, an);
     unknowns(&w, an);
     notable(&w, an);

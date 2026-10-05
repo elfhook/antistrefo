@@ -2,15 +2,17 @@
 // Module: cli (C11).
 // Owns: the decompile command, which renders one function as C-like source.
 // Depends: re_prep, re_decompile, re_dc_walk, re_func, re_stack, re_xref, re_json.
-// Depends: re_decompile, re_dc_walk, re_func, re_stack, re_xref, re_prep.
+// Depends: re_decompile, re_dc_walk, re_func, re_stack, re_xref, re_prep, re_names.
 #include "cli/cmds/re_cmds3.h"
 
 #include "features/code/re_func.h"
 #include "features/code/re_stack.h"
 #include "features/code/re_xref.h"
 #include "features/data/re_regions.h"
+#include "features/data/re_vtable.h"
 #include "features/dec/re_cfg.h"
 #include "features/dec/re_decompile.h"
+#include "features/flow/re_names.h"
 #include "utils/json/re_json.h"
 #include "utils/text/re_strbuf.h"
 #include "cli/cmds/re_prep.h"
@@ -44,6 +46,18 @@ static bool pick_func(re_ctx_t *ctx, const re_fscan_t *scan, const re_pe_t *pe, 
     return true;
 }
 
+// The xref set is what turns a call target into an imported name, so the emitter
+// gets it. Without it every call would print as a bare address. The class table
+// scan feeds the naming pass, whose names land in the function table before the
+// emitter reads it, and whose recovered virtual calls annotate the text below.
+static void build_xrefs_and_names(re_ctx_t *ctx, re_pe_t *pe, re_code_t *code, re_fscan_t *scan,
+                                  re_xrefset_t *xs, re_names_stat_t *nm) {
+    re_vset_t vs;
+    re_xref_build(code, scan, pe, ctx->arena, xs);
+    re_vtable_scan(pe, code, ctx->arena, &vs);
+    re_names_apply(pe, code, scan, &vs, ctx->arena, nm);
+}
+
 int re_cmd_decompile(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     re_file_t f;
     re_pe_t pe;
@@ -57,13 +71,15 @@ int re_cmd_decompile(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     if (!re_prepare(ctx, path, &f, &pe, &code))
         return re_err_exit_code(ctx->err->code);
     re_func_scan(&code, ctx->arena, &scan);
+    // Named before the function is picked, so the report, the graph and the view all
+    // call the same function by the same name.
+    re_prep_names(ctx, NULL, &code, &scan, NULL);
     if (!pick_func(ctx, &scan, &pe, re_cmd_positional(argc, argv, 1), &fn)) {
         re_file_close(&f);
         return re_err_exit_code(ctx->err->code);
     }
-    // The xref set is what turns a call target into an imported name, so the emitter
-    // gets it. Without it every call would print as a bare address.
-    re_xref_build(&code, &scan, &pe, ctx->arena, &xs);
+    re_names_stat_t nm;
+    build_xrefs_and_names(ctx, &pe, &code, &scan, &xs, &nm);
     re_stack_analyze(&code, fn, ctx->arena, &st);
     d.code = &code;
     d.xrefs = &xs;
@@ -84,6 +100,12 @@ int re_cmd_decompile(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     re_jw_kbool(&w, "ok", ok);
     if (fn->name.n)
         re_jw_kstr(&w, "name", fn->name);
+    // The class recoveries, in the unit each reader acts on: a slot name is a
+    // function that learned its class, a virtual call is an indirect transfer
+    // that learned its target, and a scope is a try region the image states.
+    re_jw_ku64(&w, "vtable_slots_named", nm.n_slots);
+    re_jw_ku64(&w, "virtual_calls", nm.n_vcalls);
+    re_jw_ku64(&w, "eh_scopes", nm.n_scopes);
     // Only the fields a reader acts on: the source, and the strings it touches,
     // which name the function far better than the source alone does.
     re_jw_kstr(&w, "source", re_str(text.p ? text.p : ""));
@@ -210,6 +232,7 @@ int re_cmd_cfg(re_ctx_t *ctx, const char *path, int argc, char **argv) {
     if (!re_prepare(ctx, path, &f, &pe, &code))
         return re_err_exit_code(ctx->err->code);
     re_func_scan(&code, ctx->arena, &scan);
+    re_prep_names(ctx, NULL, &code, &scan, NULL);
     if (!pick_func(ctx, &scan, &pe, re_cmd_positional(argc, argv, 1), &fn)) {
         re_file_close(&f);
         return re_err_exit_code(ctx->err->code);

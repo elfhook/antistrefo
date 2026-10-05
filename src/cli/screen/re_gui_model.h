@@ -20,7 +20,11 @@ extern "C" {
 // and a terminal has a fixed number of rows.
 #define RE_GUI_CODE_MAX 48u
 #define RE_GUI_LIST_MAX 256u
-#define RE_GUI_LIST_ROWS 24u
+
+// The most rows the list can be asked for at once. The screen refuses a terminal taller
+// than RE_SCREEN_MAX_ROWS, so this is every pane there can be, and the view sizes the
+// window to the pane it actually has instead of a fixed slice of it.
+#define RE_GUI_LIST_ROWS 200u
 
 typedef struct {
     re_strbuf_t line[RE_GUI_CODE_MAX];
@@ -44,12 +48,18 @@ typedef struct {
 // any other blank row.
 void re_gui_funcs_fill(re_gui_funcs_t *l, re_arena_t *a, const re_analysis_t *an);
 
-// The rows the list shows, kept centred on sel so the reader always sees what they
-// moved to.
+// Size the window to the pane it is drawn in. rows is how many rows the pane has this
+// frame, so a taller terminal shows more functions and a resize is answered on the next
+// frame. Clamped to the list and to RE_GUI_LIST_ROWS, the bound a caller's array is
+// built for.
+void re_gui_funcs_fit(re_gui_funcs_t *l, size_t rows);
+
+// The rows the list shows, anchored on sel so the reader always sees what they moved to
+// and stopped at the ends rather than scrolled past the list.
 void re_gui_funcs_window(size_t sel, const re_gui_funcs_t *l, const char **rows, size_t cap);
 
-// Which function a visible row is. The window stays centred on sel, and a click has
-// to name the function in that row rather than the row number itself.
+// Which function a visible row is. The window is anchored on sel, and a click has to
+// name the function in that row rather than the row number itself.
 size_t re_gui_funcs_index(size_t sel, const re_gui_funcs_t *l, size_t row);
 
 // The visible row that shows sel, so the accent and a click land on the same function.
