@@ -101,6 +101,14 @@ if(MSVC)
 endif()
 add_test(NAME jr COMMAND re_test_jr)
 
+# The MCP command table is the source for tools/list, and every advertised input
+# schema must be valid JSON for path-based tools as well as commands without a path.
+add_test(NAME mcp_tools_list
+    COMMAND ${CMAKE_COMMAND}
+        -DANTISTREFO=$<TARGET_FILE:antistrefo>
+        -DINPUT=${CMAKE_CURRENT_SOURCE_DIR}/mcp_tools_list.jsonl
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/run_mcp_tools_list.cmake)
+
 # The lowering suite is separate because a wrong IR shape still prints plausible
 # C, and only assertions on the ops themselves can tell a signed widening from
 # an unsigned one or a carried add from a dropped carry.
