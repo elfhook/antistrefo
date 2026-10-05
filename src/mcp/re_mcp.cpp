@@ -302,17 +302,21 @@ static const re_jr_t *params_of(const re_jr_t *req) {
 // tool never reads is a bug report about a tool that has not changed.
 static void tool_schema(re_strbuf_t *b, const re_cmd_t *cmd) {
     re_strbuf_puts(b, "{\"type\":\"object\",\"properties\":{");
+
     if (cmd->needs_path) {
         re_strbuf_puts(
-            b, "\"path\":{\"type\":\"string\",\"description\":\"the file to read, an "
-               "absolute or relative path\"},"
-               "\"session\":{\"type\":\"string\",\"description\":\"a name from session_open, "
-               "used instead of path\"}");
+            b,
+            "\"path\":{\"type\":\"string\",\"description\":\"the file to read, an "
+            "absolute or relative path\"},"
+            "\"session\":{\"type\":\"string\",\"description\":\"a name from session_open, "
+            "used instead of path\"},");
     }
-    re_strbuf_puts(b,
-                   "\"offset\":{\"type\":\"integer\",\"description\":\"skip this many results\"},"
-                   "\"limit\":{\"type\":\"integer\",\"description\":\"return at most this many\"}},"
-                   "\"required\":[]}");
+
+    re_strbuf_puts(
+        b,
+        "\"offset\":{\"type\":\"integer\",\"description\":\"skip this many results\"},"
+        "\"limit\":{\"type\":\"integer\",\"description\":\"return at most this many results\"}"
+        "},\"required\":[]}");
 }
 
 static void handle_tools_list(re_arena_t *a, double id) {
